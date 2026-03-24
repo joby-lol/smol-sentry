@@ -1,0 +1,33 @@
+{
+  "name": "joby/smol-sentry",
+  "description": "A conceptually simple security logging and rule-enforcing system. Supports ingesting a wide variety of signals and using them to generate bot challenges and bans.",
+  "type": "library",
+  "license": "MIT",
+  "autoload": {
+    "psr-4": {
+      "Joby\\Smol\\Sentry\\": "src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "Joby\\Smol\\Sentry\\": "tests/"
+    }
+  },
+  "authors": [
+    {
+      "name": "Joby Elliott",
+      "email": "code@joby.lol"
+    }
+  ],
+  "require-dev": {
+    "php": ">=8.3",
+    "phpunit/phpunit": "^12",
+    "phpstan/phpstan": "^2.1"
+  },
+  "require": {
+    "php": ">=8.1",
+    "joby/smol-request": "^1.0",
+    "joby/smol-response": "^1.0",
+    "joby/smol-query": "^1.2"
+  }
+}
