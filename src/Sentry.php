@@ -3,7 +3,7 @@
 /**
  * smolSentry
  * https://github.com/joby-lol/smol-sentry
- * (c) 2024-2025 Joby Elliott code@joby.lol
+ * (c) 2026 Joby Elliott code@joby.lol
  * MIT License https://opensource.org/licenses/MIT
  */
 
@@ -45,6 +45,7 @@ class Sentry
      * @param DB $db
      * @param string|null $abuseipdb_key your AbuseIPDB API Key
      * @param int $abuseipdb_daily_refreshes the number of refreshes of stale IPs to do per day -- generally best set to about half your API limit
+     * @codeCoverageIgnore
      */
     public static function default(
         DB $db,

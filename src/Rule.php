@@ -3,7 +3,7 @@
 /**
  * smolSentry
  * https://github.com/joby-lol/smol-sentry
- * (c) 2024-2025 Joby Elliott code@joby.lol
+ * (c) 2026 Joby Elliott code@joby.lol
  * MIT License https://opensource.org/licenses/MIT
  */
 

@@ -7,11 +7,13 @@
  * MIT License https://opensource.org/licenses/MIT
  */
 
-namespace Joby\Smol\Sentry;
+namespace Joby\Smol\Sentry\InspectionRules;
 
-interface ReputationSourceInterface
+use Joby\Smol\Sentry\Severity;
+
+interface InspectionRule
 {
 
-    public function check(string $ip_normalized): Outcome|null;
+    public function check(RequestData $request): Severity|null;
 
 }
