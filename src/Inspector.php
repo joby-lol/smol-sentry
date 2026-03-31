@@ -36,7 +36,13 @@ class Inspector
      * @param array<string, array{name: string|array<mixed>, type: string|array<mixed>, tmp_name: string|array<mixed>, error: int|array<mixed>, size: int|array<mixed>}>|null $FILES
      * @param array<string,string|array<string,string>>|null $COOKIE
      */
-    public function inspect(array|null $SERVER = null, array|null $GET = null, array|null $POST = null, array|null $FILES, array|null $COOKIE = null): void
+    public function inspect(
+        array|null $SERVER = null,
+        array|null $GET = null,
+        array|null $POST = null,
+        array|null $FILES = null,
+        array|null $COOKIE = null,
+    ): void
     {
         $request = new RequestData(
             $SERVER ??= $_SERVER, // @phpstan-ignore-line $_SERVER shape is right
