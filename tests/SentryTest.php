@@ -814,4 +814,81 @@ class SentryTest extends TestCase
         $this->sentry->resolve('1.2.3.4');
     }
 
+    // release()
+
+    public function test_release_clears_challenge_verdict(): void
+    {
+        $this->db->insert('verdicts')
+            ->row(['ip' => '1.2.3.4', 'ban' => 0, 'expires' => time() + 300, 'released' => null, 'time' => time(), 'reason' => 'test'])
+            ->execute();
+        $this->sentry->release('1.2.3.4');
+        $this->sentry->resolve('1.2.3.4'); // should not throw
+        $this->expectNotToPerformAssertions();
+    }
+
+    public function test_release_does_not_clear_ban_by_default(): void
+    {
+        $this->db->insert('verdicts')
+            ->row(['ip' => '1.2.3.4', 'ban' => 1, 'expires' => time() + 300, 'released' => null, 'time' => time(), 'reason' => 'test'])
+            ->execute();
+        $this->sentry->release('1.2.3.4');
+        $this->expectException(BannedException::class);
+        $this->sentry->resolve('1.2.3.4');
+    }
+
+    public function test_release_clears_ban_when_release_bans_is_true(): void
+    {
+        $this->db->insert('verdicts')
+            ->row(['ip' => '1.2.3.4', 'ban' => 1, 'expires' => time() + 300, 'released' => null, 'time' => time(), 'reason' => 'test'])
+            ->execute();
+        $this->sentry->release('1.2.3.4', release_bans: true);
+        $this->sentry->resolve('1.2.3.4');
+        $this->expectNotToPerformAssertions();
+    }
+
+    public function test_release_only_affects_specified_ip(): void
+    {
+        $ip1 = '1.2.3.4';
+        $ip2 = '5.6.7.8';
+        $this->db->insert('verdicts')
+            ->row(['ip' => $ip1, 'ban' => 1, 'expires' => time() + 300, 'released' => null, 'time' => time(), 'reason' => 'test'])
+            ->row(['ip' => $ip2, 'ban' => 1, 'expires' => time() + 300, 'released' => null, 'time' => time(), 'reason' => 'test'])
+            ->execute();
+        $this->sentry->release('1.2.3.4', release_bans: true);
+        $this->sentry->resolve('1.2.3.4');
+        $this->expectException(BannedException::class);
+        $this->sentry->resolve('5.6.7.8');
+    }
+
+    public function test_release_ignores_already_expired_verdicts(): void
+    {
+        $this->db->insert('verdicts')
+            ->row(['ip' => '1.2.3.4', 'ban' => 0, 'expires' => time() - 60, 'released' => null, 'time' => time() - 360, 'reason' => 'test'])
+            ->execute();
+        $this->sentry->release('1.2.3.4');
+        // verify the row was not touched — released should still be null
+        $row = $this->db->select('verdicts')
+            ->where('ip', '1.2.3.4')
+            ->fetch();
+        $this->assertNull($row['released']);
+    }
+
+    public function test_release_is_idempotent(): void
+    {
+        $this->db->insert('verdicts')
+            ->row(['ip' => '1.2.3.4', 'ban' => 1, 'expires' => time() + 300, 'released' => null, 'time' => time(), 'reason' => 'test'])
+            ->execute();
+        $this->sentry->release('1.2.3.4', release_bans: true);
+        $this->sentry->release('1.2.3.4', release_bans: true);
+        $this->sentry->resolve('1.2.3.4');
+        $this->expectNotToPerformAssertions();
+    }
+
+    public function test_release_on_clean_ip_does_nothing(): void
+    {
+        $this->sentry->release('1.2.3.4');
+        $this->sentry->resolve('1.2.3.4');
+        $this->expectNotToPerformAssertions();
+    }
+
 }

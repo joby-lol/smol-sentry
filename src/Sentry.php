@@ -188,6 +188,26 @@ class Sentry
     }
 
     /**
+     * Release any current verdicts against the given IP. By default only releases non-ban verdicts.
+     */
+    public function release(string|null $ip_string = null, bool $release_bans = false): void
+    {
+        // attempt to auto-set and normalize IP
+        $ip_string ??= $this->getIpString();
+        $ip_normalized = $this->normalizedIp($ip_string);
+        // build query
+        $query = $this->db->update('verdicts')
+            ->values(['released' => time()])
+            ->where('ip', $ip_normalized)
+            ->where('released is null')
+            ->where('expires >= ?', time());
+        if (!$release_bans)
+            $query->where('ban = 0');
+        // execute query
+        $query->execute();
+    }
+
+    /**
      * Check the given IP address against all reputation sources, and ban/challenge as requested by them, using the "worst" outcome as the canonical one.
      * @param string $ip_normalized
      * @return void

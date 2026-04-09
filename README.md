@@ -30,6 +30,14 @@ $sentry->signal('dangerous_url', Severity::Malicious);
 
 Both `resolve()` and `signal()` throw `BannedException` or `ChallengedException` when action is required. A banned client should receive a **403 Forbidden**. A challenged client should be redirected (**303 See Other**) to a CAPTCHA or similar challenge page, or served one inline with a **200**.
 
+## Releasing bans/challenges
+```php
+// ... do some sort of bot challenge
+
+// after passing, release all current challenge verdicts
+$sentry->release();
+```
+
 ## Inspector
 
 The Inspector automatically detects common attack patterns in raw HTTP requests and fires signals into Sentry. It works directly with PHP superglobals — no framework or dependencies required.
