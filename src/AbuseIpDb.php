@@ -12,6 +12,7 @@ namespace Joby\Smol\Sentry;
 use InvalidArgumentException;
 use Joby\Smol\Query\DB;
 use Joby\Smol\Query\Migrator;
+use SensitiveParameter;
 
 class AbuseIpDb implements ReputationSourceInterface
 {
@@ -21,20 +22,23 @@ class AbuseIpDb implements ReputationSourceInterface
      * @param string $api_key set to an API key to enable AbuseIPDB score lookups
      * @param int $challenge_threshold the threshold at which an AbuseIPDB score should result in a challenge
      * @param int $ban_threshold the threshold at which an AbuseIPDB score should result in a ban
+     * @param int $range_pass_threshold the threshold at which a range (/24 for IPv4 and /48 for IPv6) is considered trustworthy enough to skip checking individual IPs from it
      * @param int $ttl the amount of time to cache an AbuseIPDB score before it may be refreshed.
      * @param int $max_stale the maximum amount of time an AbuseIPDB score may be continued to be used, even if it is stale, to preserve API quota or if your API quota is exhausted.
      * @param int $daily_refreshes the maximum number of daily refreshes the system will perform from AbuseIPDB for previously-looked-up IPs. Setting this lower than your API quota allows you to reserve the rest of your quota for completely new and unknown IPs.
      * @param int $report_days the number of days of reports to ask AbuseIPDB to consider in API requests.
      */
     public function __construct(
-        protected DB $db,
-        protected string $api_key,
-        protected int $challenge_threshold = 70,
-        protected int $ban_threshold = 90,
-        protected int $ttl = 86400,
-        protected int $max_stale = 86400 * 14,
-        protected int $daily_refreshes = 500,
-        protected int $report_days = 30,
+        public readonly DB $db,
+        #[SensitiveParameter]
+        protected readonly string $api_key,
+        public readonly int $challenge_threshold = 70,
+        public readonly int $ban_threshold = 90,
+        public readonly int $range_pass_threshold = 0,
+        public readonly int $ttl = 86400,
+        public readonly int $max_stale = 86400 * 14,
+        public readonly int $daily_refreshes = 500,
+        public readonly int $report_days = 30,
     ) {}
 
     public function migrateDB(): void
@@ -64,18 +68,29 @@ class AbuseIpDb implements ReputationSourceInterface
      */
     public function check(string $ip_normalized): Outcome|null
     {
-        return $this->doCheck($this->rangeFromIp($ip_normalized))
-            ?? $this->doCheck($ip_normalized);
+        $range_outcome = $this->doCheck($this->rangeFromIp($ip_normalized), true);
+        if ($range_outcome === true)
+            return null;
+        elseif ($range_outcome !== null)
+            return $range_outcome;
+        else
+            return $this->doCheck($ip_normalized);
     }
 
-    protected function doCheck(string $ip_normalized): Outcome|null
+    /**
+     * Summary of doCheck
+     * @param string $ip_normalized
+     * @param bool $checking_block
+     * @return ($checking_block is true ? Outcome|true|null : Outcome|null)
+     */
+    protected function doCheck(string $ip_normalized, bool $checking_block = false): Outcome|true|null
     {
         $cached = $this->getCached($ip_normalized);
         $age = $cached ? time() - $cached['checked_at'] : null;
 
         if ($cached && $age < $this->ttl) {
             // fresh cache hit — use it
-            return $this->scoreToOutcome($cached['score']);
+            return $this->scoreToOutcome($cached['score'], $checking_block);
         }
 
         if ($cached && $age < $this->max_stale) {
@@ -84,11 +99,11 @@ class AbuseIpDb implements ReputationSourceInterface
                 $score = $this->fetchFromApi($ip_normalized);
                 if ($score !== null) {
                     $this->updateCache($ip_normalized, $score);
-                    return $this->scoreToOutcome($score);
+                    return $this->scoreToOutcome($score, $checking_block);
                 }
             }
             // quota exhausted or API failed — use stale data
-            return $this->scoreToOutcome($cached['score']);
+            return $this->scoreToOutcome($cached['score'], $checking_block);
         }
 
         if ($cached) {
@@ -96,7 +111,7 @@ class AbuseIpDb implements ReputationSourceInterface
             $score = $this->fetchFromApi($ip_normalized);
             if ($score !== null) {
                 $this->updateCache($ip_normalized, $score);
-                return $this->scoreToOutcome($score);
+                return $this->scoreToOutcome($score, $checking_block);
             }
             return null;
         }
@@ -105,7 +120,7 @@ class AbuseIpDb implements ReputationSourceInterface
         $score = $this->fetchFromApi($ip_normalized);
         if ($score !== null) {
             $this->updateCache($ip_normalized, $score);
-            return $this->scoreToOutcome($score);
+            return $this->scoreToOutcome($score, $checking_block);
         }
         return null;
     }
@@ -130,9 +145,13 @@ class AbuseIpDb implements ReputationSourceInterface
 
     /**
      * Return the Outcome configured for a given int score, based on ban_threshold and challenge_threshold
+     * 
+     * @return ($checking_block is true ? Outcome|true|null : Outcome|null)
      */
-    protected function scoreToOutcome(int $score): Outcome|null
+    protected function scoreToOutcome(int $score, bool $checking_block): Outcome|true|null
     {
+        if ($checking_block && $score <= $this->range_pass_threshold)
+            return true;
         if ($score >= $this->ban_threshold)
             return Outcome::Ban;
         if ($score >= $this->challenge_threshold)

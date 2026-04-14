@@ -236,7 +236,7 @@ try {
 
 ## Requirements
 
-Fully tested on PHP 8.3+, static analysis for PHP 8.1+. Requires the `pdo_sqlite` and `sqlite3` PHP extensions (both enabled by default in most PHP installations). Depends on [smolQuery](https://github.com/joby-lol/smol-query).
+Fully tested on PHP 8.3+, static analysis for PHP 8.2+. Requires the `pdo_sqlite` and `sqlite3` PHP extensions (both enabled by default in most PHP installations). Depends on [smolQuery](https://github.com/joby-lol/smol-query).
 
 ## License
 

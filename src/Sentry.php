@@ -13,6 +13,7 @@ use InvalidArgumentException;
 use Joby\Smol\Query\DB;
 use Joby\Smol\Query\Migrator;
 use RuntimeException;
+use SensitiveParameter;
 
 /**
  * Straightforward class for logging signals by IP address and determining whether a given IP should be banned or challenged. The basic interface beyond initial setup shouldn't require calling anything but resolve() to check for bans/challenges, and signal() to indicate that something suspicious/malicious has happened. Both public methods will throw exceptions indicating the level of action that is necessary, should it be determined at any time that the current client should be challenged or banned.
@@ -49,6 +50,7 @@ class Sentry
      */
     public static function default(
         DB $db,
+        #[SensitiveParameter]
         string|null $abuseipdb_key = null,
         int $abuseipdb_daily_refreshes = 500,
     ): static

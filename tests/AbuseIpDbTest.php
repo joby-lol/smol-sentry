@@ -235,9 +235,9 @@ class AbuseIpDbTest extends TestCase
         $this->assertEquals(Outcome::Ban, $result);
     }
 
-    public function test_individual_ip_checked_when_range_is_clean(): void
+    public function test_individual_ip_checked_when_range_is_relatively_clean(): void
     {
-        $this->seedCache('1.2.3.0/24', 0);
+        $this->seedCache('1.2.3.0/24', 5);
         $this->seedCache('1.2.3.4', 95);
         $result = $this->source->check('1.2.3.4');
         $this->assertEquals(Outcome::Ban, $result);
@@ -306,6 +306,60 @@ class AbuseIpDbTest extends TestCase
                 ])
                 ->execute();
         }
+    }
+
+    public function test_range_pass_threshold_default_is_zero(): void
+    {
+        $this->assertEquals(0, $this->source->range_pass_threshold);
+    }
+
+    public function test_range_below_pass_threshold_skips_individual_check(): void
+    {
+        $source = new TestableAbuseIpDb($this->db, 'test-api-key', range_pass_threshold: 30);
+        $source->migrateDB();
+        $this->seedCache('1.2.3.0/24', 10);
+        $source->next_api_response = 95;
+        $result = $source->check('1.2.3.4');
+        $this->assertNull($result);
+    }
+
+    public function test_range_below_pass_threshold_makes_no_api_call(): void
+    {
+        $source = new TestableAbuseIpDb($this->db, 'test-api-key', range_pass_threshold: 30);
+        $source->migrateDB();
+        $this->seedCache('1.2.3.0/24', 10);
+        $source->check('1.2.3.4');
+        $this->assertEquals(0, $source->api_call_count);
+    }
+
+    public function test_range_at_pass_threshold_skips_individual_check(): void
+    {
+        $source = new TestableAbuseIpDb($this->db, 'test-api-key', range_pass_threshold: 30);
+        $source->migrateDB();
+        $this->seedCache('1.2.3.0/24', 30);
+        $this->seedCache('1.2.3.4', 95);
+        $result = $source->check('1.2.3.4');
+        $this->assertNull($result);
+    }
+
+    public function test_range_above_pass_threshold_does_not_skip_individual_check(): void
+    {
+        $source = new TestableAbuseIpDb($this->db, 'test-api-key', range_pass_threshold: 30);
+        $source->migrateDB();
+        $this->seedCache('1.2.3.0/24', 50);
+        $this->seedCache('1.2.3.4', 95);
+        $result = $source->check('1.2.3.4');
+        $this->assertEquals(Outcome::Ban, $result);
+    }
+
+    public function test_range_pass_threshold_only_applies_when_range_cache_is_fresh(): void
+    {
+        $source = new TestableAbuseIpDb($this->db, 'test-api-key', range_pass_threshold: 30);
+        $source->migrateDB();
+        $this->seedCache('1.2.3.0/24', 10, time() - ($source->max_stale + 1));
+        $source->next_api_response = 95;
+        $source->check('1.2.3.4');
+        $this->assertGreaterThan(0, $source->api_call_count);
     }
 
 }
