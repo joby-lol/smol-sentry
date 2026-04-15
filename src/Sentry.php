@@ -83,7 +83,6 @@ class Sentry
                 null,
                 Severity::Suspicious,
             ));
-        $instance->migrateDB();
         // if an abuseipdb key is provided, add it too
         if ($abuseipdb_key !== null) {
             $abuseipdb = new AbuseIpDb(
