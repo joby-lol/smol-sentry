@@ -33,6 +33,8 @@ class RequestData
     ) {}
 
     /**
+     * Get an iterator of all user-provided values. Optionally normalized to lower case, forward slashes, and decoding arbitrary-depth URL encoding.
+     * 
      * @return Generator<string>
      */
     public function allParameterValues(bool $normalized): Generator
@@ -47,6 +49,9 @@ class RequestData
             yield $normalized ? static::normalizeString($v) : $v;
     }
 
+    /**
+     * Get all user-provided parameters other than the path, in a single string. Optionally normalized to lowercase, forward slashes, and the removal of arbitrary-depth url encoding.
+     */
     public function parameterString(bool $normalized): string
     {
         return implode(';', [
@@ -57,6 +62,9 @@ class RequestData
         ]);
     }
 
+    /**
+     * Get the path portion of the request, not including the query string. Optionally normalized to lower case, forward slashes, and decoding arbitrary-depth URL encoding.
+     */
     public function pathString(bool $normalized): string
     {
         $path = $this->SERVER['REQUEST_URI'] ?? '/';
@@ -68,6 +76,9 @@ class RequestData
         return $path;
     }
 
+    /**
+     * Get the query string of the request. Optionally normalized to lower case, forward slashes, and decoding arbitrary-depth URL encoding. Note that normalization may produce an invalid query string, but may be useful for certain checks.
+     */
     public function queryString(bool $normalized): string
     {
         $query = static::arrayString($this->GET);
@@ -76,6 +87,9 @@ class RequestData
         return $query;
     }
 
+    /**
+     * Get a single string of all user-provided POST data. Optionally normalized to lower case, forward slashes, and decoding arbitrary-depth URL encoding.
+     */
     public function postString(bool $normalized): string
     {
         $query = static::arrayString($this->POST);
@@ -84,6 +98,9 @@ class RequestData
         return $query;
     }
 
+    /**
+     * Get a single string of all user-provided cookie data. Optionally normalized to lower case, forward slashes, and decoding arbitrary-depth URL encoding.
+     */
     public function cookieString(bool $normalized): string
     {
         $query = static::arrayString($this->COOKIE);
@@ -92,6 +109,9 @@ class RequestData
         return $query;
     }
 
+    /**
+     * Get a single string of all non-file-content user-provided file upload data. Optionally normalized to lower case, forward slashes, and decoding arbitrary-depth URL encoding.
+     */
     public function filesString(bool $normalized): string
     {
         $query = implode(' ', $this->FILES);
@@ -113,6 +133,9 @@ class RequestData
         return implode(' ', $string);
     }
 
+    /**
+     * Get the user agent string of the request.
+     */
     public function userAgent(): string
     {
         $ua = $this->SERVER['HTTP_USER_AGENT'] ?? '';
