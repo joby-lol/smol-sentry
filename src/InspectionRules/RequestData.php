@@ -59,7 +59,10 @@ class RequestData
 
     public function pathString(bool $normalized): string
     {
-        $path = $this->SERVER['REQUEST_URI'] ?? ' ';
+        $path = $this->SERVER['REQUEST_URI'] ?? '/';
+        $qpos = strpos($path, '?');
+        if ($qpos !== false)
+            $path = substr($path, 0, $qpos);
         if ($normalized)
             $path = static::normalizeString($path);
         return $path;

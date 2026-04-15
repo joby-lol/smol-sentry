@@ -35,10 +35,10 @@ class RequestDataTest extends TestCase
 
     // pathString()
 
-    public function test_path_string_returns_request_uri(): void
+    public function test_path_string_returns_request_uri_without_query(): void
     {
         $request = new RequestData(['REQUEST_URI' => '/foo/bar?q=1'], [], [], [], []);
-        $this->assertSame('/foo/bar?q=1', $request->pathString(false));
+        $this->assertSame('/foo/bar', $request->pathString(false));
     }
 
     public function test_path_string_normalized(): void
@@ -47,10 +47,10 @@ class RequestDataTest extends TestCase
         $this->assertSame('/foo/bar', $request->pathString(true));
     }
 
-    public function test_path_string_returns_space_when_missing(): void
+    public function test_path_string_returns_slash_when_missing(): void
     {
         $request = new RequestData([], [], [], [], []);
-        $this->assertSame(' ', $request->pathString(false));
+        $this->assertSame('/', $request->pathString(false));
     }
 
     // queryString()
