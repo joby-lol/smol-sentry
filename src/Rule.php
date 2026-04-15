@@ -69,9 +69,8 @@ class Rule implements RuleInterface
             ->where('time', time() - $this->search_window, '>');
         if ($this->severity !== null)
             $query->where(
-                $this->severity === Severity::Malicious
-                ? 'malicious'
-                : 'NOT malicious'
+                'malicious',
+                $this->severity === Severity::Malicious ? 1 : 0
             );
         if ($this->signal_type !== null)
             $query->where('type', $this->signal_type);
