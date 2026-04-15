@@ -21,6 +21,9 @@ use Joby\Smol\Sentry\ChallengedException;
 $db = new DB('/path/to/sentry.db');
 $sentry = Sentry::default($db);
 
+// Run database migrations to initialize/update DB
+$sentry->migrateDB();
+
 // At the top of every request — throws if the client is banned or challenged
 $sentry->resolve();
 
