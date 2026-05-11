@@ -60,9 +60,9 @@ class PathManipulation implements InspectionRule
     public static function check_pathLeadingDots(RequestData $request): Severity|null
     {
         $path = $request->pathString(true);
-        if (str_starts_with($path, '.'))
+        if (str_starts_with($path, '.') && !str_starts_with($path, '.well-known/'))
             return Severity::Malicious;
-        elseif (str_contains($path, '/.'))
+        elseif (str_contains($path, '/.') && !str_starts_with($path, '/.well-known/'))
             return Severity::Malicious;
         return null;
     }
