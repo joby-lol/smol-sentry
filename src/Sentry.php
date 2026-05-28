@@ -12,8 +12,11 @@ namespace Joby\Smol\Sentry;
 use InvalidArgumentException;
 use Joby\Smol\Query\DB;
 use Joby\Smol\Query\Migrator;
+use Joby\Smol\Request\Request;
+use Joby\Smol\Sentry\Reporting\Reports;
 use RuntimeException;
 use SensitiveParameter;
+use Throwable;
 
 /**
  * Straightforward class for logging signals by IP address and determining whether a given IP should be banned or challenged. The basic interface beyond initial setup shouldn't require calling anything but resolve() to check for bans/challenges, and signal() to indicate that something suspicious/malicious has happened. Both public methods will throw exceptions indicating the level of action that is necessary, should it be determined at any time that the current client should be challenged or banned.
@@ -34,6 +37,12 @@ class Sentry
      * @var array<int,ReputationSourceInterface> $reputation_sources
      */
     protected array $reputation_sources = [];
+
+    /**
+     * Lazy-instantiated Reports object for quering the database for signals, verdicts, and other data.
+     * @var Reports|null
+     */
+    protected Reports|null $reports = null;
 
     /**
      * Helper factory for making a useful basic implementation with reasonable defaults. Set up with the following rules:
@@ -121,6 +130,17 @@ class Sentry
     }
 
     /**
+     * Get a helper for pulling data from the Sentry database. Can be useful for building your own reporting or dashboards.
+     * 
+     * @return Reports
+     */
+    public function reports(): Reports
+    {
+        return $this->reports
+            ??= new Reports($this, $this->db);
+    }
+
+    /**
      * Flag a security signal about the current/given IP address, and throw immeidately if it leads to a challenge or ban flag for the client.
      * 
      * @param string $type an arbitrary string indicating the "type" of this signal
@@ -132,7 +152,14 @@ class Sentry
      * @throws BannedException if the client should be banned
      * @throws ChallengedException if the client should be challenged
      */
-    public function signal(string $type, Severity $severity = Severity::Suspicious, string|null $ip_string = null, bool $skip_rules = false, bool $silent = false): void
+    public function signal(
+        string $type,
+        Severity $severity = Severity::Suspicious,
+        string|null $ip_string = null,
+        string|null $url = null,
+        bool $skip_rules = false,
+        bool $silent = false,
+    ): void
     {
         // attempt to auto-set and normalize IP
         $ip_string ??= $this->getIpString();
@@ -143,6 +170,7 @@ class Sentry
                 'type'      => $type,
                 'malicious' => $severity === Severity::Malicious,
                 'ip'        => $ip_normalized,
+                'url'       => $this->normalizeUrl($url ?? $this->detectUrl()),
                 'time'      => time(),
             ])
             ->execute();
@@ -206,6 +234,44 @@ class Sentry
             $query->where('ban = 0');
         // execute query
         $query->execute();
+    }
+
+    /**
+     * Attempt to detect the current request URL, or return null if it is not available or the request is being made via the CLI.
+     * 
+     * @codeCoverageIgnore most of this is simple fallback stuff
+     */
+    protected function detectUrl(): string|null
+    {
+        if (empty($_SERVER['HTTP_HOST']) || empty($_SERVER['REQUEST_URI'])) {
+            return null;
+        }
+        try {
+            return (string) Request::current()->url;
+        }
+        catch (Throwable $e) {
+            $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+                ? 'https'
+                : 'http';
+            // @phpstan-ignore-next-line these values are definitely at least stringish enough that we can trust it
+            return $scheme . '://' . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI'];
+        }
+    }
+
+    /**
+     * Normalize URL before passing it to the database. Strips control characters and truncates to 2048 bytes. Normalizes all empty strings to null, as well.
+     * 
+     * @param string|null $url
+     * @return string|null
+     */
+    protected function normalizeUrl(string|null $url): string|null
+    {
+        if (is_null($url))
+            return null;
+        $url = preg_replace('/[\x00-\x1F]/', '', $url);
+        if (empty($url))
+            return null;
+        return substr($url, 0, 2048);
     }
 
     /**

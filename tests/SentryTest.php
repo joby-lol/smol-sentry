@@ -10,6 +10,7 @@
 namespace Joby\Smol\Sentry;
 
 use Joby\Smol\Query\DB;
+use Joby\Smol\Sentry\Reporting\Reports;
 use PHPUnit\Framework\TestCase;
 
 class SentryTest extends TestCase
@@ -889,6 +890,70 @@ class SentryTest extends TestCase
         $this->sentry->release('1.2.3.4');
         $this->sentry->resolve('1.2.3.4');
         $this->expectNotToPerformAssertions();
+    }
+
+    // reporting object instantiation
+
+    public function test_reports_returns_reports_object(): void
+    {
+        $this->assertInstanceOf(
+            Reports::class,
+            $this->sentry->reports(),
+        );
+    }
+
+    public function test_multiple_reports_calls_return_same_object(): void
+    {
+        $this->assertSame(
+            $this->sentry->reports(),
+            $this->sentry->reports(),
+        );
+    }
+
+    // URL storage
+
+    public function test_url_is_null_when_running_in_cli(): void
+    {
+        // PHPUnit runs in CLI — HTTP_HOST and REQUEST_URI are absent, so auto-detection should yield null
+        $this->sentry->signal('test', Severity::Suspicious, '1.2.3.4', silent: true);
+        $row = $this->db->select('signals')->fetch();
+        $this->assertNull($row['url']);
+    }
+
+    public function test_manually_specified_url_is_stored(): void
+    {
+        $this->sentry->signal('test', Severity::Suspicious, '1.2.3.4', url: 'https://example.com/foo?bar=baz', silent: true);
+        $row = $this->db->select('signals')->fetch();
+        $this->assertEquals('https://example.com/foo?bar=baz', $row['url']);
+    }
+
+    public function test_empty_manually_specified_url_is_stored_as_null(): void
+    {
+        $this->sentry->signal('test', Severity::Suspicious, '1.2.3.4', url: '', silent: true);
+        $row = $this->db->select('signals')->fetch();
+        $this->assertNull($row['url']);
+    }
+
+    public function test_empty_manually_specified_null_byte_url_is_stored_as_null(): void
+    {
+        $this->sentry->signal('test', Severity::Suspicious, '1.2.3.4', url: "\x00", silent: true);
+        $row = $this->db->select('signals')->fetch();
+        $this->assertNull($row['url']);
+    }
+
+    public function test_url_null_bytes_are_stripped(): void
+    {
+        $this->sentry->signal('test', Severity::Suspicious, '1.2.3.4', url: "https://example.com/foo\x00bar", silent: true);
+        $row = $this->db->select('signals')->fetch();
+        $this->assertEquals('https://example.com/foobar', $row['url']);
+    }
+
+    public function test_url_is_truncated_at_2048_characters(): void
+    {
+        $url = 'https://example.com/' . str_repeat('a', 2048);
+        $this->sentry->signal('test', Severity::Suspicious, '1.2.3.4', url: $url, silent: true);
+        $row = $this->db->select('signals')->fetch();
+        $this->assertEquals(2048, mb_strlen($row['url']));
     }
 
 }
