@@ -11,13 +11,11 @@ namespace Joby\Smol\Sentry\Reporting;
 
 use Joby\Smol\Query\DB;
 use Joby\Smol\Query\SelectQuery;
-use Joby\Smol\Sentry\Sentry;
 
 class Reports
 {
 
     public function __construct(
-        protected Sentry $sentry,
         protected DB $db,
     ) {}
 
@@ -48,18 +46,13 @@ class Reports
     /**
      * Get a query for fetching all AbuseIPDB scores. Will be hydrated into AbuseIpdb objects, and orderd by checked_at descending to put newer checks at the top.
      * 
-     * @return SelectQuery<AbuseIpdbScore>|null
+     * @return SelectQuery<AbuseIpdbScore>
      */
-    public function abuseIpdb(): SelectQuery|null
+    public function abuseIpdb(): SelectQuery
     {
-        try {
-            return $this->db->select('abuseipdb')
-                ->hydrate(AbuseIpdbScore::hydrate(...)) // @phpstan-ignore-line the shape is right
-                ->order('checked_at desc');
-        }
-        catch (\Throwable $th) {
-            return null;
-        }
+        return $this->db->select('abuseipdb')
+            ->hydrate(AbuseIpdbScore::hydrate(...)) // @phpstan-ignore-line the shape is right
+            ->order('checked_at desc');
     }
 
 }

@@ -137,7 +137,7 @@ class Sentry
     public function reports(): Reports
     {
         return $this->reports
-            ??= new Reports($this, $this->db);
+            ??= new Reports($this->db);
     }
 
     /**
