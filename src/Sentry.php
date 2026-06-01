@@ -74,19 +74,19 @@ class Sentry
                 null,
                 Severity::Malicious,
             ))
-            // challenge on 5 suspicious signals in 10 minutes
+            // challenge on 10 suspicious signals in 10 minutes
             ->addRule(new Rule(
                 Outcome::Challenge,
-                5,
+                10,
                 600,
                 300,
                 null,
                 Severity::Suspicious,
             ))
-            // ban on 20 suspicious signals in an hour
+            // ban on 30 suspicious signals in an hour
             ->addRule(new Rule(
                 Outcome::Ban,
-                20,
+                30,
                 3600,
                 600,
                 null,

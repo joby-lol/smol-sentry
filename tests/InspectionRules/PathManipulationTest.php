@@ -183,50 +183,6 @@ class PathManipulationTest extends TestCase
         $this->assertNull(PathManipulation::check_pathGlobAttempts($request));
     }
 
-    // check_parametersPathTraversal
-
-    public function test_traversal_at_start_of_get_param_is_suspicious(): void
-    {
-        $request = new RequestData(['REQUEST_URI' => '/'], ['file' => '../../../etc/passwd'], [], [], []);
-        $this->assertSame(Severity::Suspicious, PathManipulation::check_parametersPathTraversal($request));
-    }
-
-    public function test_traversal_at_start_of_post_param_is_suspicious(): void
-    {
-        $request = new RequestData(['REQUEST_URI' => '/'], [], ['path' => '../secret'], [], []);
-        $this->assertSame(Severity::Suspicious, PathManipulation::check_parametersPathTraversal($request));
-    }
-
-    public function test_traversal_at_start_of_cookie_is_suspicious(): void
-    {
-        $request = new RequestData(['REQUEST_URI' => '/'], [], [], [], ['data' => '../../../etc/shadow']);
-        $this->assertSame(Severity::Suspicious, PathManipulation::check_parametersPathTraversal($request));
-    }
-
-    public function test_traversal_in_uploaded_filename_is_suspicious(): void
-    {
-        $request = new RequestData(['REQUEST_URI' => '/'], [], [], ['../../../etc/cron.d/backdoor'], []);
-        $this->assertSame(Severity::Suspicious, PathManipulation::check_parametersPathTraversal($request));
-    }
-
-    public function test_traversal_mid_string_is_not_flagged(): void
-    {
-        $request = new RequestData(['REQUEST_URI' => '/'], ['text' => 'navigate to ../parent'], [], [], []);
-        $this->assertNull(PathManipulation::check_parametersPathTraversal($request));
-    }
-
-    public function test_normal_param_values_are_fine(): void
-    {
-        $request = new RequestData(['REQUEST_URI' => '/'], ['q' => 'hello world'], [], [], []);
-        $this->assertNull(PathManipulation::check_parametersPathTraversal($request));
-    }
-
-    public function test_relative_path_without_traversal_is_fine(): void
-    {
-        $request = new RequestData(['REQUEST_URI' => '/'], ['path' => 'subdir/file.txt'], [], [], []);
-        $this->assertNull(PathManipulation::check_parametersPathTraversal($request));
-    }
-
     // check_overEncoding
 
     public function test_double_encoded_path_is_malicious(): void
@@ -239,12 +195,6 @@ class PathManipulationTest extends TestCase
     {
         $request = new RequestData(['REQUEST_URI' => '/foo%252fbar'], [], [], [], []);
         $this->assertSame(Severity::Malicious, PathManipulation::check_overEncoding($request));
-    }
-
-    public function test_double_encoded_param_is_suspicious(): void
-    {
-        $request = new RequestData(['REQUEST_URI' => '/'], ['q' => '%252e%252e'], [], [], []);
-        $this->assertSame(Severity::Suspicious, PathManipulation::check_overEncoding($request));
     }
 
     public function test_single_encoded_path_is_fine(): void

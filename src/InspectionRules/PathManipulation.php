@@ -38,7 +38,6 @@ class PathManipulation implements InspectionRule
             static::check_controlCharacters(...),
             static::check_pathLeadingDots(...),
             static::check_pathGlobAttempts(...),
-            static::check_parametersPathTraversal(...),
             static::check_overEncoding(...),
             static::check_longUrl(...),
         ];
@@ -67,15 +66,6 @@ class PathManipulation implements InspectionRule
         return null;
     }
 
-    public static function check_parametersPathTraversal(RequestData $request): Severity|null
-    {
-        foreach ($request->allParameterValues(true) as $value) {
-            if (str_starts_with($value, '../'))
-                return Severity::Suspicious;
-        }
-        return null;
-    }
-
     public static function check_pathGlobAttempts(RequestData $request): Severity|null
     {
         $path = $request->pathString(true);
@@ -91,8 +81,6 @@ class PathManipulation implements InspectionRule
     {
         if (static::containsOverEncoding($request->pathString(false)))
             return Severity::Malicious;
-        if (static::containsOverEncoding($request->parameterString(false)))
-            return Severity::Suspicious;
         return null;
     }
 
