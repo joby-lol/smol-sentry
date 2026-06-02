@@ -102,7 +102,6 @@ class Sentry
                 ip_daily_refreshes: $abuseipdb_daily_ip_refreshes,
                 range_daily_refreshes: $abuseipdb_daily_range_refreshes,
             );
-            $abuseipdb->migrateDB();
             $instance->addReputationSource($abuseipdb);
         }
         // return built instance
@@ -123,13 +122,44 @@ class Sentry
         protected float $ban_ramp_up_rate = 1.5,
         protected int $ban_max_duration = 86400 * 30,
         protected int $reputation_outcome_duration = 86400,
+        protected int $record_retention_days = 90,
     ) {}
 
     public function migrateDB(): void
     {
+        // run internal migrations
         $migrator = new Migrator($this->db->filename, '_migrations_smolsentry');
         $migrator->addMigrationDirectory(__DIR__ . '/../migrations/sentry');
         $migrator->migrate();
+        // run reputation source migrations
+        foreach ($this->reputation_sources as $source) {
+            $source->migrateDB();
+        }
+    }
+
+    /**
+     * Do internal database cleanup/housekeeping. By default this will keep records for $record_retention_days beyond their activity/expiration/release
+     */
+    public function cleanupDB(): void
+    {
+        $expire_before = time() - ($this->record_retention_days * 86400);
+        // clean up old signals
+        $this->db->delete('signals')
+            ->where('time', $expire_before, '<')
+            ->execute();
+        // clean up released verdicts
+        $this->db->delete('verdicts')
+            ->where('expires', $expire_before, '<')
+            ->execute();
+        // clean up released verdicts
+        $this->db->delete('verdicts')
+            ->where('released is not null')
+            ->where('released', $expire_before, '<')
+            ->execute();
+        // run reputation source cleanups
+        foreach ($this->reputation_sources as $source) {
+            $source->cleanupDB();
+        }
     }
 
     /**
