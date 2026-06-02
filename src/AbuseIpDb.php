@@ -102,16 +102,16 @@ class AbuseIpDb implements ReputationSourceInterface
         $cached = $this->getCached($ip_normalized, $checking_block);
         $age = $cached ? time() - $cached['checked_at'] : null;
         $ttl = $checking_block ? $this->range_ttl : $this->ip_ttl;
-        $max_stale = $checking_block ? $this->range_max_stale : $this->ip_max_stale;
-        $daily_refreshes = $checking_block ? $this->range_daily_refreshes : $this->ip_daily_refreshes;
 
         if ($cached && $age < $ttl) {
             // fresh cache hit — use it
             return $this->scoreToOutcome($cached['score'], $checking_block);
         }
 
+        // check if stale but usable — try to refresh if quota allows
+        $max_stale = $checking_block ? $this->range_max_stale : $this->ip_max_stale;
         if ($cached && $age < $max_stale) {
-            // stale but usable — try to refresh if quota allows
+            $daily_refreshes = $checking_block ? $this->range_daily_refreshes : $this->ip_daily_refreshes;
             if ($this->countDailyRefreshes($checking_block) < $daily_refreshes) {
                 $score = $this->fetchFromApi($ip_normalized);
                 if ($score !== null) {
@@ -123,8 +123,8 @@ class AbuseIpDb implements ReputationSourceInterface
             return $this->scoreToOutcome($cached['score'], $checking_block);
         }
 
+        // too stale to trust — try API, skip if fails
         if ($cached) {
-            // too stale to trust — try API, skip if fails
             $score = $this->fetchFromApi($ip_normalized);
             if ($score !== null) {
                 $this->updateCache($ip_normalized, $score, $checking_block);

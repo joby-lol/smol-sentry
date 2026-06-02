@@ -25,16 +25,6 @@ class TestableAbuseIpDb extends AbuseIpDb
         return $this->next_api_response;
     }
 
-    public function ttl(): int
-    {
-        return $this->ip_ttl;
-    }
-
-    public function maxStale(): int
-    {
-        return $this->ip_max_stale;
-    }
-
 }
 
 class AbuseIpDbTest extends TestCase
@@ -154,7 +144,7 @@ class AbuseIpDbTest extends TestCase
 
     public function test_stale_cache_within_max_stale_uses_stale_on_api_failure(): void
     {
-        $this->seedCache('1.2.3.4', 95, false, time() - ($this->source->ttl() + 1));
+        $this->seedCache('1.2.3.4', 95, false, time() - ($this->source->ip_ttl + 1));
         $this->source->next_api_response = null; // API fails
         $result = $this->source->check('1.2.3.4');
         $this->assertEquals(Outcome::Ban, $result);
@@ -162,7 +152,7 @@ class AbuseIpDbTest extends TestCase
 
     public function test_stale_cache_within_max_stale_refreshes_when_quota_allows(): void
     {
-        $this->seedCache('1.2.3.4', 50, false, time() - ($this->source->ttl() + 1));
+        $this->seedCache('1.2.3.4', 50, false, time() - ($this->source->ip_ttl + 1));
         $this->source->next_api_response = 95;
         $result = $this->source->check('1.2.3.4');
         $this->assertEquals(Outcome::Ban, $result);
@@ -174,7 +164,7 @@ class AbuseIpDbTest extends TestCase
         // seed daily refresh quota
         $this->seedManyRefreshes(1500);
         $this->seedCache('1.2.3.0/24', 10, true);
-        $this->seedCache('1.2.3.4', 95, false, time() - ($this->source->ttl() + 1));
+        $this->seedCache('1.2.3.4', 95, false, time() - ($this->source->ip_ttl + 1));
         $this->source->next_api_response = 0;
         $result = $this->source->check('1.2.3.4');
         $this->assertEquals(Outcome::Ban, $result); // uses stale score of 95
@@ -183,8 +173,8 @@ class AbuseIpDbTest extends TestCase
 
     public function test_too_stale_cache_returns_null_on_api_failure(): void
     {
-        $this->seedCache('1.2.3.0/24', 10, true, time() - ($this->source->maxStale() + 1));
-        $this->seedCache('1.2.3.4', 95, false, time() - ($this->source->maxStale() + 1));
+        $this->seedCache('1.2.3.0/24', 10, true, time() - ($this->source->ip_max_stale + 1));
+        $this->seedCache('1.2.3.4', 95, false, time() - ($this->source->ip_max_stale + 1));
         $this->source->next_api_response = null;
         $result = $this->source->check('1.2.3.4');
         $this->assertNull($result);
@@ -192,7 +182,7 @@ class AbuseIpDbTest extends TestCase
 
     public function test_too_stale_cache_refreshes_on_api_success(): void
     {
-        $this->seedCache('1.2.3.4', 0, false, time() - ($this->source->maxStale() + 1));
+        $this->seedCache('1.2.3.4', 0, false, time() - ($this->source->ip_max_stale + 1));
         $this->source->next_api_response = 95;
         $result = $this->source->check('1.2.3.4');
         $this->assertEquals(Outcome::Ban, $result);
@@ -211,7 +201,7 @@ class AbuseIpDbTest extends TestCase
     public function test_rate_limited_returns_stale_cache_if_available(): void
     {
         $this->db->insert('abuseipdb_ratelimited')->row(['time' => time()])->execute();
-        $this->seedCache('1.2.3.4', 95, false, time() - ($this->source->ttl() + 1));
+        $this->seedCache('1.2.3.4', 95, false, time() - ($this->source->ip_ttl + 1));
         $result = $this->source->check('1.2.3.4');
         $this->assertEquals(Outcome::Ban, $result);
     }
@@ -254,7 +244,7 @@ class AbuseIpDbTest extends TestCase
 
     public function test_cleanup_removes_stale_cache_entries(): void
     {
-        $this->seedCache('1.2.3.4', 95, false, time() - ($this->source->maxStale() + 1));
+        $this->seedCache('1.2.3.4', 95, false, time() - ($this->source->ip_max_stale + 1));
         $this->source->cleanupDB();
         $this->assertNull($this->db->select('abuseipdb')->where('ip', '1.2.3.4')->fetch());
     }
@@ -342,9 +332,75 @@ class AbuseIpDbTest extends TestCase
     {
         $source = new TestableAbuseIpDb($this->db, 'test-api-key', range_pass_threshold: 30);
         $source->migrateDB();
-        $this->seedCache('1.2.3.0/24', 10, true, time() - ($source->ip_max_stale + 1));
+        $this->seedCache('1.2.3.0/24', 10, true, time() - ($source->range_max_stale + 1));
         $source->next_api_response = 95;
         $source->check('1.2.3.4');
+        $this->assertGreaterThan(0, $source->api_call_count);
+    }
+
+    // Block-level (range) separate config
+
+    public function test_range_uses_range_ttl_not_ip_ttl(): void
+    {
+        $source = new TestableAbuseIpDb($this->db, 'test-api-key', ip_ttl: 60, range_ttl: 86400);
+        $source->migrateDB();
+        $this->seedCache('1.2.3.0/24', 95, true, time() - 120); // stale by ip_ttl, fresh by range_ttl
+        $source->next_api_response = 0; // a refresh would clear the ban
+        $result = $source->check('1.2.3.4');
+        $this->assertEquals(Outcome::Ban, $result); // fresh by range_ttl, no refresh, range bans
+        $this->assertEquals(0, $source->api_call_count);
+    }
+
+    public function test_range_uses_range_max_stale_not_ip_max_stale(): void
+    {
+        $source = new TestableAbuseIpDb($this->db, 'test-api-key', ip_max_stale: 100, range_max_stale: 86400, range_ttl: 1);
+        $source->migrateDB();
+        $this->seedCache('1.2.3.0/24', 95, true, time() - 200); // beyond ip_max_stale, within range_max_stale
+        $source->next_api_response = null; // refresh fails -> must fall back to stale
+        $result = $source->check('1.2.3.4');
+        $this->assertEquals(Outcome::Ban, $result); // usable under range_max_stale
+    }
+
+    public function test_cleanup_removes_stale_block_cache_entries(): void
+    {
+        $source = new TestableAbuseIpDb($this->db, 'test-api-key', ip_max_stale: 100000, range_max_stale: 1000);
+        $source->migrateDB();
+        $this->seedCache('1.2.3.0/24', 95, true, time() - 2000);
+        $source->cleanupDB();
+        $this->assertNull($this->db->select('abuseipdb_blocks')->where('ip', '1.2.3.0/24')->fetch());
+    }
+
+    public function test_cleanup_keeps_fresh_block_cache_entries(): void
+    {
+        // stale by ip_max_stale but fresh by range_max_stale -> must be kept
+        $source = new TestableAbuseIpDb($this->db, 'test-api-key', ip_max_stale: 1000, range_max_stale: 100000);
+        $source->migrateDB();
+        $this->seedCache('1.2.3.0/24', 95, true, time() - 2000);
+        $source->cleanupDB();
+        $this->assertNotNull($this->db->select('abuseipdb_blocks')->where('ip', '1.2.3.0/24')->fetch());
+    }
+
+    public function test_range_refresh_quota_exhausted_uses_stale_range(): void
+    {
+        $source = new TestableAbuseIpDb($this->db, 'test-api-key', range_daily_refreshes: 5, range_ttl: 1, range_max_stale: 86400);
+        $source->migrateDB();
+        $this->seedManyBlockRefreshes(10); // exceed range quota
+        $this->seedCache('1.2.3.0/24', 95, true, time() - 100); // stale, past range_ttl
+        $source->next_api_response = 0;
+        $result = $source->check('1.2.3.4');
+        $this->assertEquals(Outcome::Ban, $result); // quota gone -> stale ban used, no refresh
+        $this->assertEquals(0, $source->api_call_count);
+    }
+
+    public function test_ip_quota_exhaustion_does_not_block_range_refresh(): void
+    {
+        $source = new TestableAbuseIpDb($this->db, 'test-api-key', range_ttl: 1, range_max_stale: 86400);
+        $source->migrateDB();
+        $this->seedManyRefreshes(1500); // exhaust IP quota only
+        $this->seedCache('1.2.3.0/24', 10, true, time() - 100); // stale, currently inconclusive (10 < challenge)
+        $source->next_api_response = 95; // a successful range refresh -> ban
+        $result = $source->check('1.2.3.4');
+        $this->assertEquals(Outcome::Ban, $result); // range refreshes despite IP quota
         $this->assertGreaterThan(0, $source->api_call_count);
     }
 
@@ -375,6 +431,23 @@ class AbuseIpDbTest extends TestCase
                 ->conflictColumns('ip')
                 ->row([
                     'ip'         => "10.0." . intdiv($i, 255) . "." . ($i % 255),
+                    'score'      => 0,
+                    'checked_at' => time(),
+                ])
+                ->execute();
+        }
+    }
+
+    /**
+     * Seed many 10.0.x.x/24 block records with zero score to consume range refresh quota
+     */
+    protected function seedManyBlockRefreshes(int $count): void
+    {
+        for ($i = 0; $i < $count; $i++) {
+            $this->db->upsert('abuseipdb_blocks')
+                ->conflictColumns('ip')
+                ->row([
+                    'ip'         => "10.0." . intdiv($i, 255) . "." . ($i % 255) . "/24",
                     'score'      => 0,
                     'checked_at' => time(),
                 ])
