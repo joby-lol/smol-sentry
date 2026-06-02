@@ -54,14 +54,16 @@ class Sentry
      * 
      * @param DB $db
      * @param string|null $abuseipdb_key your AbuseIPDB API Key
-     * @param int $abuseipdb_daily_refreshes the number of refreshes of stale IPs to do per day -- generally best set to about half your API limit
+     * @param int $abuseipdb_daily_ip_refreshes the number of refreshes of stale IPs to do per day -- generally best set to about half your API limit
+     * @param int $abuseipdb_daily_range_refreshes the number of refreshes of stale IP ranges to do per day -- generally best set to about half your API limit
      * @codeCoverageIgnore
      */
     public static function default(
         DB $db,
         #[SensitiveParameter]
         string|null $abuseipdb_key = null,
-        int $abuseipdb_daily_refreshes = 500,
+        int $abuseipdb_daily_ip_refreshes = 1500,
+        int $abuseipdb_daily_range_refreshes = 500,
     ): static
     {
         $instance = (new static($db))
@@ -95,9 +97,10 @@ class Sentry
         // if an abuseipdb key is provided, add it too
         if ($abuseipdb_key !== null) {
             $abuseipdb = new AbuseIpDb(
-                $db,
-                $abuseipdb_key,
-                daily_refreshes: $abuseipdb_daily_refreshes,
+                db: $db,
+                api_key: $abuseipdb_key,
+                ip_daily_refreshes: $abuseipdb_daily_ip_refreshes,
+                range_daily_refreshes: $abuseipdb_daily_range_refreshes,
             );
             $abuseipdb->migrateDB();
             $instance->addReputationSource($abuseipdb);
