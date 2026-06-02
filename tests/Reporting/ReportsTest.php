@@ -109,19 +109,19 @@ class ReportsTest extends TestCase
 
     public function test_abuse_ipdb_returns_select_query_when_table_exists(): void
     {
-        $this->createAbuseIpdbTable();
+        $this->createAbuseIpdbTables();
         $this->assertInstanceOf(SelectQuery::class, $this->reports->abuseIpdb());
     }
 
     public function test_abuse_ipdb_returns_null_when_empty(): void
     {
-        $this->createAbuseIpdbTable();
+        $this->createAbuseIpdbTables();
         $this->assertNull($this->reports->abuseIpdb()->fetch());
     }
 
     public function test_abuse_ipdb_hydrates_into_abuse_ipdb_score_objects(): void
     {
-        $this->createAbuseIpdbTable();
+        $this->createAbuseIpdbTables();
         $this->db->insert('abuseipdb')
             ->row(['ip' => '1.2.3.4', 'score' => 42, 'checked_at' => time()])
             ->execute();
@@ -130,7 +130,7 @@ class ReportsTest extends TestCase
 
     public function test_abuse_ipdb_ordered_by_checked_at_descending(): void
     {
-        $this->createAbuseIpdbTable();
+        $this->createAbuseIpdbTables();
         $this->db->insert('abuseipdb')
             ->row(['ip' => '1.2.3.4', 'score' => 10, 'checked_at' => time() - 100])
             ->row(['ip' => '5.6.7.8', 'score' => 20, 'checked_at' => time()])
@@ -139,12 +139,30 @@ class ReportsTest extends TestCase
         $this->assertGreaterThan($scores[1]->checked_at->getTimestamp(), $scores[0]->checked_at->getTimestamp());
     }
 
+    public function test_abuse_ipdb_blocks_ordered_by_checked_at_descending(): void
+    {
+        $this->createAbuseIpdbTables();
+        $this->db->insert('abuseipdb_blocks')
+            ->row(['ip' => '1.2.3.0/24', 'score' => 10, 'checked_at' => time() - 100])
+            ->row(['ip' => '5.6.7.0/24', 'score' => 20, 'checked_at' => time()])
+            ->execute();
+        $scores = [...$this->reports->abuseIpdb(true)->fetchAll()];
+        $this->assertGreaterThan($scores[1]->checked_at->getTimestamp(), $scores[0]->checked_at->getTimestamp());
+    }
+
     // helpers
 
-    private function createAbuseIpdbTable(): void
+    private function createAbuseIpdbTables(): void
     {
         $this->db->pdo->exec('
             CREATE TABLE "abuseipdb" (
+                "ip" STRING NOT NULL COLLATE BINARY PRIMARY KEY,
+                "score" INTEGER NOT NULL,
+                "checked_at" INTEGER NOT NULL
+            )
+        ');
+        $this->db->pdo->exec('
+            CREATE TABLE "abuseipdb_blocks" (
                 "ip" STRING NOT NULL COLLATE BINARY PRIMARY KEY,
                 "score" INTEGER NOT NULL,
                 "checked_at" INTEGER NOT NULL

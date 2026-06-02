@@ -48,9 +48,9 @@ class Reports
      * 
      * @return SelectQuery<AbuseIpdbScore>
      */
-    public function abuseIpdb(): SelectQuery
+    public function abuseIpdb(bool $display_block_checks = false): SelectQuery
     {
-        return $this->db->select('abuseipdb')
+        return $this->db->select($display_block_checks ? 'abuseipdb_blocks' : 'abuseipdb')
             ->hydrate(AbuseIpdbScore::hydrate(...)) // @phpstan-ignore-line the shape is right
             ->order('checked_at desc');
     }

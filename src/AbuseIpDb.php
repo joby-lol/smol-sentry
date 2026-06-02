@@ -20,24 +20,30 @@ class AbuseIpDb implements ReputationSourceInterface
     /**
      * @param DB $db the database to cache data in
      * @param string $api_key set to an API key to enable AbuseIPDB score lookups
-     * @param int $challenge_threshold the threshold at which an AbuseIPDB score should result in a challenge
-     * @param int $ban_threshold the threshold at which an AbuseIPDB score should result in a ban
+     * @param int $ip_challenge_threshold the threshold at which an AbuseIPDB score should result in a challenge
+     * @param int $ip_ban_threshold the threshold at which an AbuseIPDB score should result in a ban
      * @param int $range_pass_threshold the threshold at which a range (/24 for IPv4 and /48 for IPv6) is considered trustworthy enough to skip checking individual IPs from it
-     * @param int $ttl the amount of time to cache an AbuseIPDB score before it may be refreshed.
-     * @param int $max_stale the maximum amount of time an AbuseIPDB score may be continued to be used, even if it is stale, to preserve API quota or if your API quota is exhausted.
-     * @param int $daily_refreshes the maximum number of daily refreshes the system will perform from AbuseIPDB for previously-looked-up IPs. Setting this lower than your API quota allows you to reserve the rest of your quota for completely new and unknown IPs.
+     * @param int $ip_ttl the amount of time to cache an AbuseIPDB score before it may be refreshed.
+     * @param int $ip_max_stale the maximum amount of time an AbuseIPDB score may be continued to be used, even if it is stale, to preserve API quota or if your API quota is exhausted.
+     * @param int $ip_daily_refreshes the maximum number of daily refreshes the system will perform from AbuseIPDB for previously-looked-up IPs. Setting this lower than your API quota allows you to reserve the rest of your quota for completely new and unknown IPs.
+     * @param int $range_ttl the amount of time to cache an AbuseIPDB score for a range before it may be refreshed.
+     * @param int $range_max_stale the maximum amount of time an AbuseIPDB score for a range may be continued to be used, even if it is stale, to preserve API quota or if your API quota is exhausted.
+     * @param int $range_daily_refreshes the maximum number of daily refreshes the system will perform from AbuseIPDB for previously-looked-up IP ranges. Setting this lower than your API quota allows you to reserve the rest of your quota for completely new and unknown IPs.
      * @param int $report_days the number of days of reports to ask AbuseIPDB to consider in API requests.
      */
     public function __construct(
         public readonly DB $db,
         #[SensitiveParameter]
         protected readonly string $api_key,
-        public readonly int $challenge_threshold = 70,
-        public readonly int $ban_threshold = 90,
+        public readonly int $ip_challenge_threshold = 70,
+        public readonly int $ip_ban_threshold = 90,
         public readonly int $range_pass_threshold = 0,
-        public readonly int $ttl = 86400,
-        public readonly int $max_stale = 86400 * 14,
-        public readonly int $daily_refreshes = 500,
+        public readonly int $ip_ttl = 86400 * 7,
+        public readonly int $ip_max_stale = 86400 * 30,
+        public readonly int $ip_daily_refreshes = 1500,
+        public readonly int $range_ttl = 86400 * 14,
+        public readonly int $range_max_stale = 86400 * 90,
+        public readonly int $range_daily_refreshes = 500,
         public readonly int $report_days = 30,
     ) {}
 
@@ -55,11 +61,19 @@ class AbuseIpDb implements ReputationSourceInterface
     {
         // clean up IP data
         $this->db->delete('abuseipdb')
-            ->where('checked_at', time() - $this->max_stale, '<')
+            ->where('checked_at', time() - $this->ip_max_stale, '<')
+            ->execute();
+        // clean up range data
+        $this->db->delete('abuseipdb_blocks')
+            ->where('checked_at', time() - $this->range_max_stale, '<')
             ->execute();
         // clean up rate limiting data
         $this->db->delete('abuseipdb_ratelimited')
-            ->where('time', time() - 600, '<')
+            ->where('time', time() - 86400, '<')
+            ->execute();
+        // clean up rate limiting data
+        $this->db->delete('abuseipdb_ratelimited_blocks')
+            ->where('time', time() - 86400, '<')
             ->execute();
     }
 
@@ -85,20 +99,23 @@ class AbuseIpDb implements ReputationSourceInterface
      */
     protected function doCheck(string $ip_normalized, bool $checking_block = false): Outcome|true|null
     {
-        $cached = $this->getCached($ip_normalized);
+        $cached = $this->getCached($ip_normalized, $checking_block);
         $age = $cached ? time() - $cached['checked_at'] : null;
+        $ttl = $checking_block ? $this->range_ttl : $this->ip_ttl;
 
-        if ($cached && $age < $this->ttl) {
+        if ($cached && $age < $ttl) {
             // fresh cache hit — use it
             return $this->scoreToOutcome($cached['score'], $checking_block);
         }
 
-        if ($cached && $age < $this->max_stale) {
-            // stale but usable — try to refresh if quota allows
-            if ($this->countDailyRefreshes() < $this->daily_refreshes) {
+        // check if stale but usable — try to refresh if quota allows
+        $max_stale = $checking_block ? $this->range_max_stale : $this->ip_max_stale;
+        if ($cached && $age < $max_stale) {
+            $daily_refreshes = $checking_block ? $this->range_daily_refreshes : $this->ip_daily_refreshes;
+            if ($this->countDailyRefreshes($checking_block) < $daily_refreshes) {
                 $score = $this->fetchFromApi($ip_normalized);
                 if ($score !== null) {
-                    $this->updateCache($ip_normalized, $score);
+                    $this->updateCache($ip_normalized, $score, $checking_block);
                     return $this->scoreToOutcome($score, $checking_block);
                 }
             }
@@ -106,11 +123,11 @@ class AbuseIpDb implements ReputationSourceInterface
             return $this->scoreToOutcome($cached['score'], $checking_block);
         }
 
+        // too stale to trust — try API, skip if fails
         if ($cached) {
-            // too stale to trust — try API, skip if fails
             $score = $this->fetchFromApi($ip_normalized);
             if ($score !== null) {
-                $this->updateCache($ip_normalized, $score);
+                $this->updateCache($ip_normalized, $score, $checking_block);
                 return $this->scoreToOutcome($score, $checking_block);
             }
             return null;
@@ -119,7 +136,7 @@ class AbuseIpDb implements ReputationSourceInterface
         // no cache entry at all — always try API
         $score = $this->fetchFromApi($ip_normalized);
         if ($score !== null) {
-            $this->updateCache($ip_normalized, $score);
+            $this->updateCache($ip_normalized, $score, $checking_block);
             return $this->scoreToOutcome($score, $checking_block);
         }
         return null;
@@ -152,9 +169,9 @@ class AbuseIpDb implements ReputationSourceInterface
     {
         if ($checking_block && $score <= $this->range_pass_threshold)
             return true;
-        if ($score >= $this->ban_threshold)
+        if ($score >= $this->ip_ban_threshold)
             return Outcome::Ban;
-        if ($score >= $this->challenge_threshold)
+        if ($score >= $this->ip_challenge_threshold)
             return Outcome::Challenge;
         return null;
     }
@@ -164,17 +181,17 @@ class AbuseIpDb implements ReputationSourceInterface
      * 
      * @return array{ip:string,score:int,checked_at:int}|null
      */
-    protected function getCached(string $ip): array|null
+    protected function getCached(string $ip, bool $block): array|null
     {
         // @phpstan-ignore-next-line it's the right array format
-        return $this->db->select('abuseipdb')
+        return $this->db->select($block ? 'abuseipdb_blocks' : 'abuseipdb')
             ->where('ip', $ip)
             ->fetch();
     }
 
-    protected function updateCache(string $ip, int $score): void
+    protected function updateCache(string $ip, int $score, bool $block): void
     {
-        $this->db->upsert('abuseipdb')
+        $this->db->upsert($block ? 'abuseipdb_blocks' : 'abuseipdb')
             ->conflictColumns('ip')
             ->row([
                 'ip'         => $ip,
@@ -184,9 +201,9 @@ class AbuseIpDb implements ReputationSourceInterface
             ->execute();
     }
 
-    protected function countDailyRefreshes(): int
+    protected function countDailyRefreshes(bool $block): int
     {
-        return $this->db->select('abuseipdb')
+        return $this->db->select($block ? 'abuseipdb_blocks' : 'abuseipdb')
             ->where('checked_at', time() - 86400, '>')
             ->count();
     }
@@ -248,10 +265,10 @@ class AbuseIpDb implements ReputationSourceInterface
         return intval($data['data']['abuseConfidenceScore']); // @phpstan-ignore-line
     }
 
-    protected function isRateLimited(): bool
+    public function isRateLimited(): bool
     {
         return $this->db->select('abuseipdb_ratelimited')
-            ->where('time', time() - 600, '>')
+            ->where('time', time() - 1800, '>')
             ->count() > 0;
     }
 
