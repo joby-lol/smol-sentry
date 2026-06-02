@@ -35,9 +35,9 @@ class AbuseIpDb implements ReputationSourceInterface
         public readonly int $challenge_threshold = 70,
         public readonly int $ban_threshold = 90,
         public readonly int $range_pass_threshold = 0,
-        public readonly int $ttl = 86400,
-        public readonly int $max_stale = 86400 * 14,
-        public readonly int $daily_refreshes = 500,
+        public readonly int $ttl = 86400 * 7,
+        public readonly int $max_stale = 86400 * 30,
+        public readonly int $daily_refreshes = 1500,
         public readonly int $report_days = 30,
     ) {}
 
