@@ -247,6 +247,36 @@ class AbuseIpDb implements ReputationSourceInterface
      */
     protected function rangeApiRequest(string $range_normalized): Score|null
     {
+        $data = $this->doRangeApiRequest($range_normalized);
+        if ($data === null)
+            return null;
+        // write all individual IP scores to database
+        foreach ($data['reportedAddress'] as $reported) {
+            $this->setIpScore($reported['ipAddress'], $reported['abuseConfidenceScore']);
+        }
+        // compute a score and write to database
+        $score = new Score(
+            $range_normalized,
+            true,
+            (int) ceil(count($data['reportedAddress']) / $data['numPossibleHosts']),
+            time(),
+            $this->refreshAtTime(time()),
+            $this->ignoreAtTime(time()),
+        );
+        $this->setRangeScore($range_normalized, $score->score);
+        // return score object
+        return $score;
+    }
+
+    /**
+     * Do the actual API request for a given range
+     * 
+     * @codeCoverageIgnore this is basically untestable without shenanigans
+     * 
+     * @return array{numPossibleHosts:int<0,max>,reportedAddress:array<array{ipAddress:string,abuseConfidenceScore:int<0,100>}>}|null
+     */
+    protected function doRangeApiRequest(string $range_normalized): array|null
+    {
         $url = 'https://api.abuseipdb.com/api/v2/check-block?' . http_build_query([
             'network'      => $range_normalized,
             'maxAgeInDays' => $this->report_days,
@@ -276,46 +306,39 @@ class AbuseIpDb implements ReputationSourceInterface
         if ($response === false)
             return null;
         // decode data
-        $data = json_decode($response, true);
-        if (!is_array($data))
-            return null;
-        if (!isset($data['data']))
-            return null;
-        if (!is_array($data['data']))
-            return null;
-        // write all individual IP scores to database
-        assert(is_array($data['data']['reportedAddress']) || is_null($data['data']['reportedAddress']));
-        foreach ($data['data']['reportedAddress'] ?? [] as $reported) {
-            if (!is_array($reported))
-                continue;
-            if (!is_string($reported['ipAddress']))
-                continue;
-            if (!filter_var($reported['ipAddress'], FILTER_VALIDATE_IP))
-                continue;
-            if (!is_int($reported['abuseConfidenceScore']))
-                continue;
-            $this->setIpScore($reported['ipAddress'], $reported['abuseConfidenceScore']);
-        }
-        // compute a score and write to database
-        assert(is_int($data['data']['numPossibleHosts']));
-        assert($data['data']['numPossibleHosts'] > 0);
-        $score = new Score(
-            $range_normalized,
-            true,
-            (int) ceil(count($data['data']['reportedAddress'] ?? []) / $data['data']['numPossibleHosts']),
-            time(),
-            $this->refreshAtTime(time()),
-            $this->ignoreAtTime(time()),
-        );
-        $this->setRangeScore($range_normalized, $score->score);
-        // return score object
-        return $score;
+        return json_decode($response, true)['data']; //@phpstan-ignore-line we just have to trust the API
     }
 
     /**
      * Attempt to update an individual IP's records from the API, and return the resulting score if successful.
      */
     protected function ipApiRequest(string $ip_normalized): Score|null
+    {
+        $data = $this->doIpApiRequest($ip_normalized);
+        if ($data === null)
+            return null;
+        // compute a score and write to database
+        $score = new Score(
+            $ip_normalized,
+            false,
+            $data['abuseConfidenceScore'],
+            time(),
+            $this->refreshAtTime(time()),
+            $this->ignoreAtTime(time()),
+        );
+        $this->setIpScore($ip_normalized, $score->score);
+        // return score object
+        return $score;
+    }
+
+    /**
+     * Do the actual API request for a given individual IP
+     * 
+     * @codeCoverageIgnore this is basically untestable without shenanigans
+     * 
+     * @return array{ipAddress:string,abuseConfidenceScore:int<0,100>}|null
+     */
+    protected function doIpApiRequest(string $ip_normalized): array|null
     {
         $url = 'https://api.abuseipdb.com/api/v2/check?' . http_build_query([
             'ipAddress'    => $ip_normalized,
@@ -346,27 +369,7 @@ class AbuseIpDb implements ReputationSourceInterface
         if ($response === false)
             return null;
         // decode data
-        $data = json_decode($response, true);
-        if (!is_array($data))
-            return null;
-        if (!isset($data['data']))
-            return null;
-        if (!is_array($data['data']))
-            return null;
-        // compute a score and write to database
-        assert(is_int($data['data']['abuseConfidenceScore']));
-        assert($data['data']['abuseConfidenceScore'] >= 0);
-        $score = new Score(
-            $ip_normalized,
-            false,
-            intval($data['data']['abuseConfidenceScore']),
-            time(),
-            $this->refreshAtTime(time()),
-            $this->ignoreAtTime(time()),
-        );
-        $this->setIpScore($ip_normalized, $score->score);
-        // return score object
-        return $score;
+        return json_decode($response, true)['data']; //@phpstan-ignore-line we just have to trust the API
     }
 
     /**

@@ -27,23 +27,45 @@ class TestableAbuseIpDb extends AbuseIpDb
 
     public int $range_api_call_count = 0;
 
-    protected function ipApiRequest(string $ip_normalized): Score|null
+    /**
+     * @inheritDoc
+     */
+    protected function doIpApiRequest(string $ip_normalized): array|null
     {
         $this->ip_api_call_count++;
-        $response = $this->next_ip_api_response;
+        $response_score = $this->next_ip_api_response;
         $this->next_ip_api_response = null;
-        if ($response === null)
+        if (is_null($response_score))
             return null;
-        // save into database like real request
-        $this->setIpScore($ip_normalized, $response);
-        return new Score(
-            $ip_normalized,
-            false,
-            $response,
-            time(),
-            $this->refreshAtTime(time()),
-            $this->ignoreAtTime(time()),
-        );
+        // return array like the actual endpoint would
+        return [
+            "ipAddress"            => $ip_normalized,
+            "abuseConfidenceScore" => $response_score,
+        ];
+    }
+
+    /**
+     * @inheritDoc
+     */
+    protected function doRangeApiRequest(string $range_normalized): array|null
+    {
+        $this->range_api_call_count++;
+        $ip_list = $this->next_range_api_response;
+        $this->next_range_api_response = null;
+        if ($ip_list === null)
+            return null;
+        // return an array like what the actual endpoint would
+        $result = [
+            'numPossibleHosts' => 100,
+            'reportedAddress'  => [],
+        ];
+        foreach ($ip_list as $ip => $score) {
+            $result['reportedAddress'][] = [
+                'ipAddress'            => $ip,
+                'abuseConfidenceScore' => $score,
+            ];
+        }
+        return $result;
     }
 
     protected function rangeApiRequest(string $range_normalized): Score|null
