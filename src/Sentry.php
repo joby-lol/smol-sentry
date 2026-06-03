@@ -47,22 +47,22 @@ class Sentry
     /**
      * Helper factory for making a useful basic implementation with reasonable defaults. Set up with the following rules:
      * - ban immediately on malicious signals
-     * - challenge on 5 suspicious signals in 10 minutes
-     * - ban on 20 suspicious signals in an hour
+     * - challenge on 10 suspicious signals in 10 minutes
+     * - ban on 30 suspicious signals in an hour
      * 
      * Optionally also configured with AbuseIPDB lookups if an api key is provided.
      * 
      * @param DB $db
      * @param string|null $abuseipdb_key your AbuseIPDB API Key
-     * @param int $abuseipdb_daily_ip_refreshes the number of refreshes of stale IPs to do per day -- generally best set to about half your API limit
-     * @param int $abuseipdb_daily_range_refreshes the number of refreshes of stale IP ranges to do per day -- generally best set to about half your API limit
+     * @param int $abuseipdb_daily_ip_refreshes the number of refreshes of stale IPs to do per day -- generally best set to about 1/3 to 2/3 your API limit
+     * @param int $abuseipdb_daily_range_refreshes the number of refreshes of stale IP ranges to do per day -- generally best set to about 1/2 to 3/4 your API limit
      * @codeCoverageIgnore
      */
     public static function default(
         DB $db,
         #[SensitiveParameter]
         string|null $abuseipdb_key = null,
-        int $abuseipdb_daily_ip_refreshes = 1500,
+        int $abuseipdb_daily_ip_refreshes = 1000,
         int $abuseipdb_daily_range_refreshes = 500,
     ): static
     {
@@ -196,7 +196,7 @@ class Sentry
     {
         // attempt to auto-set and normalize IP
         $ip_string ??= $this->getIpString();
-        $ip_normalized = $this->normalizedIp($ip_string);
+        $ip_normalized = $this->normalizeIp($ip_string);
         // log signal in database
         $this->db->insert('signals')
             ->row([
@@ -229,7 +229,7 @@ class Sentry
     {
         // attempt to auto-set and normalize IP
         $ip_string ??= $this->getIpString();
-        $ip_normalized = $this->normalizedIp($ip_string);
+        $ip_normalized = $this->normalizeIp($ip_string);
         // query for existing verdicts
         $verdict = $this->db->select('verdicts')
             ->where('ip', $ip_normalized)
@@ -256,7 +256,7 @@ class Sentry
     {
         // attempt to auto-set and normalize IP
         $ip_string ??= $this->getIpString();
-        $ip_normalized = $this->normalizedIp($ip_string);
+        $ip_normalized = $this->normalizeIp($ip_string);
         // build query
         $query = $this->db->update('verdicts')
             ->values(['released' => time()])
@@ -390,7 +390,7 @@ class Sentry
     /**
      * Convert a human-readable IPv4 or IPv6 string into a normalized string, including zeroing the last 64 bits of IPv6 addresses.
      */
-    protected function normalizedIp(string $ip_string): string
+    public static function normalizeIp(string $ip_string): string
     {
         $binary = inet_pton($ip_string);
         if ($binary === false)
