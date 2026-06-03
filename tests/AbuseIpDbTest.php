@@ -68,30 +68,6 @@ class TestableAbuseIpDb extends AbuseIpDb
         return $result;
     }
 
-    protected function rangeApiRequest(string $range_normalized): Score|null
-    {
-        $this->range_api_call_count++;
-        $response = $this->next_range_api_response;
-        $this->next_range_api_response = null;
-        if ($response === null)
-            return null;
-        // insert individual IP scores like the actual one does
-        foreach ($response as $individual_ip => $individual_score) {
-            $this->setIpScore($individual_ip, $individual_score);
-        }
-        // save range score into database like real request
-        $this->setRangeScore($range_normalized, count($response));
-        // return final score
-        return new Score(
-            $range_normalized,
-            true,
-            count($response),
-            time(),
-            $this->refreshAtTime(time()),
-            $this->ignoreAtTime(time()),
-        );
-    }
-
 }
 
 class AbuseIpDbTest extends TestCase
@@ -340,6 +316,23 @@ class AbuseIpDbTest extends TestCase
         $this->db->insert('abuseipdb_ratelimited_blocks')->row(['time' => time()])->execute();
         $this->source->cleanupDB();
         $this->assertEquals(1, $this->db->select('abuseipdb_ratelimited_blocks')->count());
+    }
+
+    // Test range API request result handling
+
+    public function test_range_api_request_sets_scores_for_range_and_individual_ips(): void
+    {
+        $this->source->next_range_api_response = [
+            '10.0.0.1' => '0',
+            '10.0.0.2' => $this->source->challenge_threshold,
+            '10.0.0.3' => $this->source->ban_threshold,
+        ];
+        $this->assertNull($this->source->check('10.0.0.1'));
+        $this->assertEquals(Outcome::Challenge, $this->source->check('10.0.0.2'));
+        $this->assertEquals(Outcome::Ban, $this->source->check('10.0.0.3'));
+        // should have gotten all this from a single range api request
+        $this->assertEquals(1, $this->source->range_api_call_count);
+        $this->assertEquals(0, $this->source->ip_api_call_count);
     }
 
     // Helpers
