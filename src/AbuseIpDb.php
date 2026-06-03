@@ -20,14 +20,11 @@ class AbuseIpDb implements ReputationSourceInterface
     /**
      * @param DB $db the database to cache data in
      * @param string $api_key set to an API key to enable AbuseIPDB score lookups
-     * @param int $ip_challenge_threshold the threshold at which an AbuseIPDB score should result in a challenge
-     * @param int $ip_ban_threshold the threshold at which an AbuseIPDB score should result in a ban
-     * @param int $range_pass_threshold the threshold at which a range (/24 for IPv4 and /48 for IPv6) is considered trustworthy enough to skip checking individual IPs from it
-     * @param int $ip_ttl the amount of time to cache an AbuseIPDB score before it may be refreshed.
-     * @param int $ip_max_stale the maximum amount of time an AbuseIPDB score may be continued to be used, even if it is stale, to preserve API quota or if your API quota is exhausted.
+     * @param int $challenge_threshold the threshold at which an AbuseIPDB score should result in a challenge
+     * @param int $ban_threshold the threshold at which an AbuseIPDB score should result in a ban
+     * @param int $cache_ttl the amount of time to cache an AbuseIPDB API result before it may be refreshed.
+     * @param int $max_stale_ttl the maximum amount of time an AbuseIPDB score may be continued to be used, even if it is stale, to preserve API quota or if your API quota is exhausted.
      * @param int $ip_daily_refreshes the maximum number of daily refreshes the system will perform from AbuseIPDB for previously-looked-up IPs. Setting this lower than your API quota allows you to reserve the rest of your quota for completely new and unknown IPs.
-     * @param int $range_ttl the amount of time to cache an AbuseIPDB score for a range before it may be refreshed.
-     * @param int $range_max_stale the maximum amount of time an AbuseIPDB score for a range may be continued to be used, even if it is stale, to preserve API quota or if your API quota is exhausted.
      * @param int $range_daily_refreshes the maximum number of daily refreshes the system will perform from AbuseIPDB for previously-looked-up IP ranges. Setting this lower than your API quota allows you to reserve the rest of your quota for completely new and unknown IPs.
      * @param int $report_days the number of days of reports to ask AbuseIPDB to consider in API requests.
      */
@@ -35,117 +32,172 @@ class AbuseIpDb implements ReputationSourceInterface
         public readonly DB $db,
         #[SensitiveParameter]
         protected readonly string $api_key,
-        public readonly int $ip_challenge_threshold = 70,
-        public readonly int $ip_ban_threshold = 90,
-        public readonly int $range_pass_threshold = 0,
-        public readonly int $ip_ttl = 86400 * 7,
-        public readonly int $ip_max_stale = 86400 * 30,
+        public readonly int $challenge_threshold = 70,
+        public readonly int $ban_threshold = 90,
+        public readonly int $cache_ttl = 86400,
+        public readonly int $max_stale_ttl = 86400 * 30,
         public readonly int $ip_daily_refreshes = 1500,
-        public readonly int $range_ttl = 86400 * 14,
-        public readonly int $range_max_stale = 86400 * 90,
         public readonly int $range_daily_refreshes = 500,
         public readonly int $report_days = 30,
     ) {}
 
-    public function migrateDB(): void
-    {
-        $migrator = new Migrator(
-            $this->db->filename,
-            '_migrations_smolsentry_abuseipdb',
-        );
-        $migrator->addMigrationDirectory(__DIR__ . '/../migrations/abuseipdb');
-        $migrator->migrate();
-    }
-
-    public function cleanupDB(): void
-    {
-        // clean up IP data
-        $this->db->delete('abuseipdb')
-            ->where('checked_at', time() - $this->ip_max_stale, '<')
-            ->execute();
-        // clean up range data
-        $this->db->delete('abuseipdb_blocks')
-            ->where('checked_at', time() - $this->range_max_stale, '<')
-            ->execute();
-        // clean up rate limiting data
-        $this->db->delete('abuseipdb_ratelimited')
-            ->where('time', time() - 86400, '<')
-            ->execute();
-        // clean up rate limiting data
-        $this->db->delete('abuseipdb_ratelimited_blocks')
-            ->where('time', time() - 86400, '<')
-            ->execute();
-    }
-
     /**
-     * Check the given IP and its /24 or /48 block (IPv4/IPv6, respectively), and return an Outcome if it passes either the ban or challenge threshold, or null if it does not.
+     * Check the given IP and its /24 or /48 block (IPv4/IPv6, respectively), and return an Outcome if it passes either the ban or challenge threshold, or null if it does not or the API is rate limited or non-functional.
      */
     public function check(string $ip_normalized): Outcome|null
     {
-        $range_outcome = $this->doCheck($this->rangeFromIp($ip_normalized), true);
-        if ($range_outcome === true)
+        // get current non-expired range score if possible
+        $range_normalized = $this->rangeFromIp($ip_normalized);
+        $range_score = $this->rangeScore($range_normalized);
+        // attempt to refresh range score if it's stale or doesn't exist
+        if ($range_score === null || $range_score->stale())
+            $range_score = $this->refreshRangeScore($range_normalized, $range_score !== null)
+                ?? $range_score;
+        // if range is clean (exists with zero score), return null
+        if ($range_score?->score === 0)
             return null;
-        elseif ($range_outcome !== null)
-            return $range_outcome;
-        else
-            return $this->doCheck($ip_normalized);
+        // attempt to look up individual IP
+        $ip_score = $this->ipScore($ip_normalized);
+        // attempt to refresh IP score if it's stale or doesn't exist
+        if ($ip_score === null || $ip_score->stale())
+            $ip_score = $this->refreshIpScore($ip_normalized, $ip_score !== null)
+                ?? $ip_score;
+        // if there is an IP score, return its outcome
+        if ($ip_score)
+            return $this->scoreToOutcome($ip_score);
+        // otherwise we failed to look up or refresh any scores, so we have no opinion
+        return null;
     }
 
     /**
-     * Summary of doCheck
-     * @param string $ip_normalized
-     * @param bool $checking_block
-     * @return ($checking_block is true ? Outcome|true|null : Outcome|null)
+     * Convert a score into an outcome
      */
-    protected function doCheck(string $ip_normalized, bool $checking_block = false): Outcome|true|null
+    protected function scoreToOutcome(Score $score): Outcome|null
     {
-        $cached = $this->getCached($ip_normalized, $checking_block);
-        $age = $cached ? time() - $cached['checked_at'] : null;
-        $ttl = $checking_block ? $this->range_ttl : $this->ip_ttl;
-
-        if ($cached && $age < $ttl) {
-            // fresh cache hit — use it
-            return $this->scoreToOutcome($cached['score'], $checking_block);
-        }
-
-        // check if stale but usable — try to refresh if quota allows
-        $max_stale = $checking_block ? $this->range_max_stale : $this->ip_max_stale;
-        if ($cached && $age < $max_stale) {
-            $daily_refreshes = $checking_block ? $this->range_daily_refreshes : $this->ip_daily_refreshes;
-            if ($this->countDailyRefreshes($checking_block) < $daily_refreshes) {
-                $score = $this->fetchFromApi($ip_normalized);
-                if ($score !== null) {
-                    $this->updateCache($ip_normalized, $score, $checking_block);
-                    return $this->scoreToOutcome($score, $checking_block);
-                }
-            }
-            // quota exhausted or API failed — use stale data
-            return $this->scoreToOutcome($cached['score'], $checking_block);
-        }
-
-        // too stale to trust — try API, skip if fails
-        if ($cached) {
-            $score = $this->fetchFromApi($ip_normalized);
-            if ($score !== null) {
-                $this->updateCache($ip_normalized, $score, $checking_block);
-                return $this->scoreToOutcome($score, $checking_block);
-            }
+        if ($score->score >= $this->ban_threshold)
+            return Outcome::Ban;
+        elseif ($score->score >= $this->challenge_threshold)
+            return Outcome::Challenge;
+        else
             return null;
-        }
+    }
 
-        // no cache entry at all — always try API
-        $score = $this->fetchFromApi($ip_normalized);
-        if ($score !== null) {
-            $this->updateCache($ip_normalized, $score, $checking_block);
-            return $this->scoreToOutcome($score, $checking_block);
-        }
-        return null;
+    /**
+     * Attempt to refresh an individual IP address's score. Will only update if IP requests are not rate limited, and if this IP is already cached and the daily refresh rate has not been reached.
+     */
+    protected function refreshIpScore(string $ip_normalized, bool $exists_already): Score|null
+    {
+        // if we're rate limited return null
+        if ($this->ipRateLimited())
+            return null;
+        // if this result already exists in the cache and we've exhausted our 24 hour limit return null
+        if ($exists_already && $this->ipRefreshLimitReached())
+            return null;
+        // otherwise try to make an API request
+        return $this->ipApiRequest($ip_normalized);
+    }
+
+    /**
+     * Attempt to refresh a range's scores. Will only update if range requests are not rate limited, and if this range is already cached and the refresh rate has not been reached.
+     */
+    protected function refreshRangeScore(string $range_normalized, bool $exists_already): Score|null
+    {
+        // if we're rate limited return null
+        if ($this->rangeRateLimited())
+            return null;
+        // if this result already exists in the cache and we've exhausted our 24 hour limit return null
+        if ($exists_already && $this->rangeRefreshLimitReached())
+            return null;
+        // otherwise try to make an API request
+        return $this->rangeApiRequest($range_normalized);
+    }
+
+    /**
+     * Check whether we have reached the rolling 24-hour limit on refreshes of stale but not expired records for ranges.
+     */
+    protected function rangeRefreshLimitReached(): bool
+    {
+        return $this->db->select('abuseipdb_blocks')
+            ->where('checked_at > ?', time() - 86400)
+            ->count() >= $this->range_daily_refreshes;
+    }
+
+    /**
+     * Check whether we have reached the rolling 24-hour limit on refreshes of stale but not expired records for individual IPs.
+     */
+    protected function ipRefreshLimitReached(): bool
+    {
+        return $this->db->select('abuseipdb')
+            ->where('checked_at > ?', time() - 86400)
+            ->count() >= $this->ip_daily_refreshes;
+    }
+
+    /**
+     * Attempt to retrieve a non-expired score for a given IP range.
+     */
+    protected function rangeScore(string $range_normalized): Score|null
+    {
+        $score = $this->db->select('abuseipdb_blocks')
+            ->where('ip', $range_normalized)
+            ->hydrate(
+                fn(array $row): Score => new Score(
+                    $range_normalized,
+                    true,
+                    $row['score'],// @phpstan-ignore-line shape is right
+                    $row['checked_at'],// @phpstan-ignore-line shape is right
+                    $this->refreshAtTime($row['checked_at']),// @phpstan-ignore-line shape is right
+                    $this->ignoreAtTime($row['checked_at']),// @phpstan-ignore-line shape is right
+                )
+            )
+            ->fetch();
+        if ($score && $score->expired())
+            return null;
+        return $score;
+    }
+
+    /**
+     * Attempt to retrieve a non-expired score for a given individual IP.
+     */
+    protected function ipScore(string $ip_normalized): Score|null
+    {
+        $score = $this->db->select('abuseipdb')
+            ->where('ip', $ip_normalized)
+            ->hydrate(
+                fn(array $row): Score => new Score(
+                    $ip_normalized,
+                    true,
+                    $row['score'],// @phpstan-ignore-line shape is right
+                    $row['checked_at'],// @phpstan-ignore-line shape is right
+                    $this->refreshAtTime($row['checked_at']),// @phpstan-ignore-line shape is right
+                    $this->ignoreAtTime($row['checked_at']),// @phpstan-ignore-line shape is right
+                )
+            )
+            ->fetch();
+        if ($score && $score->expired())
+            return null;
+        return $score;
+    }
+
+    /**
+     * Determine the time at which a record set at $checked_at should be refreshed if possible.
+     */
+    protected function refreshAtTime(int $checked_at): int
+    {
+        return $checked_at + $this->cache_ttl;
+    }
+
+    /**
+     * Determine the time at which a record set at $checked_at is so old it should be entirely ignored.
+     */
+    protected function ignoreAtTime(int $checked_at): int
+    {
+        return $checked_at + $this->max_stale_ttl;
     }
 
     /**
      * Return CIDR notation of the /24 block for IPv4 addresses or /48 block for IPv6 addresses
      */
-    public function rangeFromIp(string $ip_normalized): string
+    public static function rangeFromIp(string $ip_normalized): string
     {
         // IPv4: use /24
         $parts = explode('.', $ip_normalized);
@@ -161,76 +213,74 @@ class AbuseIpDb implements ReputationSourceInterface
     }
 
     /**
-     * Return the Outcome configured for a given int score, based on ban_threshold and challenge_threshold
-     * 
-     * @return ($checking_block is true ? Outcome|true|null : Outcome|null)
+     * Set a given individual IP's score in the internal cache. Should be a well-formed ipv4 or ipv6 address (ipv6 should be lower case). You can use Sentry::normalizeIp() to ensure it is well formatted.
      */
-    protected function scoreToOutcome(int $score, bool $checking_block): Outcome|true|null
+    public function setIpScore(string $ip_normalized, int $score): void
     {
-        if ($checking_block && $score <= $this->range_pass_threshold)
-            return true;
-        if ($score >= $this->ip_ban_threshold)
-            return Outcome::Ban;
-        if ($score >= $this->ip_challenge_threshold)
-            return Outcome::Challenge;
-        return null;
-    }
-
-    /**
-     * Get the cached row from the database, if it exists.
-     * 
-     * @return array{ip:string,score:int,checked_at:int}|null
-     */
-    protected function getCached(string $ip, bool $block): array|null
-    {
-        // @phpstan-ignore-next-line it's the right array format
-        return $this->db->select($block ? 'abuseipdb_blocks' : 'abuseipdb')
-            ->where('ip', $ip)
-            ->fetch();
-    }
-
-    protected function updateCache(string $ip, int $score, bool $block): void
-    {
-        $this->db->upsert($block ? 'abuseipdb_blocks' : 'abuseipdb')
+        $this->db->upsert('abuseipdb')
             ->conflictColumns('ip')
             ->row([
-                'ip'         => $ip,
+                'ip'         => $ip_normalized,
                 'score'      => $score,
                 'checked_at' => time(),
             ])
             ->execute();
     }
 
-    protected function countDailyRefreshes(bool $block): int
+    /**
+     * Set a given IP range's score in the internal cache. Input should be a well-formed ipv4 /24 or ipv6 /48 block in CIDR notation. You can use Sentry::normalizeIp and AbuseIpDb::rangeFromIp() to ensure it is well formatted.
+     */
+    protected function setRangeScore(string $range_normalized, int $score): void
     {
-        return $this->db->select($block ? 'abuseipdb_blocks' : 'abuseipdb')
-            ->where('checked_at', time() - 86400, '>')
-            ->count();
-    }
-
-    protected function fetchFromApi(string $ip): int|null
-    {
-        // short-circuit if rate limited
-        if ($this->isRateLimited())
-            return null;
-        return $this->doFetchFromApi($ip);
+        $this->db->upsert('abuseipdb_blocks')
+            ->conflictColumns('ip')
+            ->row([
+                'ip'         => $range_normalized,
+                'score'      => $score,
+                'checked_at' => time(),
+            ])
+            ->execute();
     }
 
     /**
-     * @codeCoverageIgnore this can't really be tested easily
+     * Attempt to update a range's records from the API, and return the resulting score if successful.
      */
-    protected function doFetchFromApi(string $ip): int|null
+    protected function rangeApiRequest(string $range_normalized): Score|null
     {
-        // otherwise build request
-        $is_range = str_contains($ip, '/');
-        $url = $is_range
-            ? 'https://api.abuseipdb.com/api/v2/check-block?' . http_build_query([
-                'network' => $ip,
-            ])
-            : 'https://api.abuseipdb.com/api/v2/check?' . http_build_query([
-                'ipAddress'    => $ip,
-                'maxAgeInDays' => $this->report_days,
-            ]);
+        $data = $this->doRangeApiRequest($range_normalized);
+        if ($data === null)
+            return null;
+        // write all individual IP scores to database
+        foreach ($data['reportedAddress'] as $reported) {
+            $this->setIpScore($reported['ipAddress'], $reported['abuseConfidenceScore']);
+        }
+        // compute a score and write to database
+        $score = new Score(
+            $range_normalized,
+            true,
+            (int) ceil(count($data['reportedAddress']) / $data['numPossibleHosts']),
+            time(),
+            $this->refreshAtTime(time()),
+            $this->ignoreAtTime(time()),
+        );
+        $this->setRangeScore($range_normalized, $score->score);
+        // return score object
+        return $score;
+    }
+
+    /**
+     * Do the actual API request for a given range
+     * 
+     * @codeCoverageIgnore this is basically untestable without shenanigans
+     * 
+     * @return array{numPossibleHosts:int<0,max>,reportedAddress:array<array{ipAddress:string,abuseConfidenceScore:int<0,100>}>}|null
+     */
+    protected function doRangeApiRequest(string $range_normalized): array|null
+    {
+        $url = 'https://api.abuseipdb.com/api/v2/check-block?' . http_build_query([
+            'network'      => $range_normalized,
+            'maxAgeInDays' => $this->report_days,
+        ]);
         // prepare resquest
         $context = stream_context_create([
             'http' => [
@@ -244,38 +294,157 @@ class AbuseIpDb implements ReputationSourceInterface
         ]);
         // fetch response
         $response = @file_get_contents($url, false, $context);
-        if ($response === false)
-            return null;
-        // decode data
-        $data = json_decode($response, true);
-        if (!is_array($data) || !isset($data['data']))
-            return null;
         // check for rate limit
         foreach ($http_response_header as $header) {
             // if response was 429, then rate limit
             if (str_starts_with($header, 'HTTP/') && str_contains($header, '429')) {
-                $this->recordRateLimit();
+                $this->setRangeRateLimited();
                 return null;
             }
         }
-        // for ranges, return the percent of IPs that have been reported
-        if ($is_range)
-            return intval($data['data']['percentDistinct'] ?? 0); // @phpstan-ignore-line
-        // for individual IPs just return the score
-        return intval($data['data']['abuseConfidenceScore']); // @phpstan-ignore-line
+        // check if response failed otherwise
+        if ($response === false)
+            return null;
+        // decode data
+        return json_decode($response, true)['data']; //@phpstan-ignore-line we just have to trust the API
     }
 
-    public function isRateLimited(): bool
+    /**
+     * Attempt to update an individual IP's records from the API, and return the resulting score if successful.
+     */
+    protected function ipApiRequest(string $ip_normalized): Score|null
+    {
+        $data = $this->doIpApiRequest($ip_normalized);
+        if ($data === null)
+            return null;
+        // compute a score and write to database
+        $score = new Score(
+            $ip_normalized,
+            false,
+            $data['abuseConfidenceScore'],
+            time(),
+            $this->refreshAtTime(time()),
+            $this->ignoreAtTime(time()),
+        );
+        $this->setIpScore($ip_normalized, $score->score);
+        // return score object
+        return $score;
+    }
+
+    /**
+     * Do the actual API request for a given individual IP
+     * 
+     * @codeCoverageIgnore this is basically untestable without shenanigans
+     * 
+     * @return array{ipAddress:string,abuseConfidenceScore:int<0,100>}|null
+     */
+    protected function doIpApiRequest(string $ip_normalized): array|null
+    {
+        $url = 'https://api.abuseipdb.com/api/v2/check?' . http_build_query([
+            'ipAddress'    => $ip_normalized,
+            'maxAgeInDays' => $this->report_days,
+        ]);
+        // prepare resquest
+        $context = stream_context_create([
+            'http' => [
+                'method'        => 'GET',
+                'header'        => implode("\r\n", [
+                    'Key: ' . $this->api_key,
+                    'Accept: application/json',
+                ]),
+                'ignore_errors' => true,
+            ],
+        ]);
+        // fetch response
+        $response = @file_get_contents($url, false, $context);
+        // check for rate limit
+        foreach ($http_response_header as $header) {
+            // if response was 429, then rate limit
+            if (str_starts_with($header, 'HTTP/') && str_contains($header, '429')) {
+                $this->setIpRateLimited();
+                return null;
+            }
+        }
+        // check if response failed otherwise
+        if ($response === false)
+            return null;
+        // decode data
+        return json_decode($response, true)['data']; //@phpstan-ignore-line we just have to trust the API
+    }
+
+    /**
+     * Whether range API requests are rate-limited (30 minute cooldown)
+     */
+    protected function rangeRateLimited(): bool
+    {
+        return $this->db->select('abuseipdb_ratelimited_blocks')
+            ->where('time', time() - 1800, '>')
+            ->count() > 0;
+    }
+
+    /**
+     * Set flag indicating range API requests are rate-limited (30 minute cooldown)
+     */
+    protected function setRangeRateLimited(): void
+    {
+        $this->db->insert('abuseipdb_ratelimited_blocks')
+            ->row(['time' => time()])
+            ->execute();
+    }
+
+    /**
+     * Whether individual IP API requests are rate-limited (30 minute cooldown)
+     */
+    protected function ipRateLimited(): bool
     {
         return $this->db->select('abuseipdb_ratelimited')
             ->where('time', time() - 1800, '>')
             ->count() > 0;
     }
 
-    protected function recordRateLimit(): void
+    /**
+     * Set flag indicating individual IP API requests are rate-limited (30 minute cooldown)
+     */
+    protected function setIpRateLimited(): void
     {
         $this->db->insert('abuseipdb_ratelimited')
             ->row(['time' => time()])
+            ->execute();
+    }
+
+    /**
+     * Run any necessary database migrations
+     */
+    public function migrateDB(): void
+    {
+        $migrator = new Migrator(
+            $this->db->filename,
+            '_migrations_smolsentry_abuseipdb',
+        );
+        $migrator->addMigrationDirectory(__DIR__ . '/../migrations/abuseipdb');
+        $migrator->migrate();
+    }
+
+    /**
+     * Run database cleanup processes, such as clearing old records
+     */
+    public function cleanupDB(): void
+    {
+        // clean up IP data
+        $this->db->delete('abuseipdb')
+            ->where('checked_at', time() - $this->max_stale_ttl, '<')
+            ->execute();
+        // clean up range data
+        $this->db->delete('abuseipdb_blocks')
+            ->where('checked_at', time() - $this->max_stale_ttl, '<')
+            ->execute();
+        // clean up rate limiting data
+        $this->db->delete('abuseipdb_ratelimited')
+            ->where('time', time() - 86400, '<')
+            ->execute();
+        // clean up rate limiting data
+        $this->db->delete('abuseipdb_ratelimited_blocks')
+            ->where('time', time() - 86400, '<')
             ->execute();
     }
 

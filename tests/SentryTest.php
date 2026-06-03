@@ -583,6 +583,10 @@ class SentryTest extends TestCase
                 return Outcome::Ban;
             }
 
+            public function cleanupDB(): void {}
+
+            public function migrateDB(): void {}
+
             },
         );
         $this->expectException(BannedException::class);
@@ -599,6 +603,10 @@ class SentryTest extends TestCase
             {
                 return Outcome::Challenge;
             }
+
+            public function cleanupDB(): void {}
+
+            public function migrateDB(): void {}
 
             },
         );
@@ -618,6 +626,10 @@ class SentryTest extends TestCase
                 return null;
             }
 
+            public function cleanupDB(): void {}
+
+            public function migrateDB(): void {}
+
             },
         );
         $this->sentry->resolve('1.2.3.4');
@@ -633,6 +645,10 @@ class SentryTest extends TestCase
             {
                 return Outcome::Ban;
             }
+
+            public function cleanupDB(): void {}
+
+            public function migrateDB(): void {}
 
             },
         );
@@ -654,6 +670,10 @@ class SentryTest extends TestCase
             {
                 return Outcome::Challenge;
             }
+
+            public function cleanupDB(): void {}
+
+            public function migrateDB(): void {}
 
             },
         );
@@ -677,6 +697,10 @@ class SentryTest extends TestCase
                 return Outcome::Challenge;
             }
 
+            public function cleanupDB(): void {}
+
+            public function migrateDB(): void {}
+
                 },
             )
             ->addReputationSource(
@@ -687,6 +711,10 @@ class SentryTest extends TestCase
             {
                 return Outcome::Ban;
             }
+
+            public function cleanupDB(): void {}
+
+            public function migrateDB(): void {}
 
                 },
             );
@@ -707,6 +735,10 @@ class SentryTest extends TestCase
                 return Outcome::Ban;
             }
 
+            public function cleanupDB(): void {}
+
+            public function migrateDB(): void {}
+
                 },
             )
             ->addReputationSource(
@@ -720,6 +752,10 @@ class SentryTest extends TestCase
                 $this->checked = true;
                 return null;
             }
+
+            public function cleanupDB(): void {}
+
+            public function migrateDB(): void {}
 
                 },
             );
@@ -745,6 +781,10 @@ class SentryTest extends TestCase
                 $this->callCount++;
                 return Outcome::Ban;
             }
+
+            public function cleanupDB(): void {}
+
+            public function migrateDB(): void {}
 
             },
         );
@@ -773,6 +813,10 @@ class SentryTest extends TestCase
                 return Outcome::Challenge;
             }
 
+            public function cleanupDB(): void {}
+
+            public function migrateDB(): void {}
+
             };
         $this->sentry->addReputationSource($source);
         // write a released challenge verdict for this source
@@ -799,6 +843,10 @@ class SentryTest extends TestCase
             {
                 return Outcome::Challenge;
             }
+
+            public function cleanupDB(): void {}
+
+            public function migrateDB(): void {}
 
             };
         $this->sentry->addReputationSource($source);
