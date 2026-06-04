@@ -1004,4 +1004,400 @@ class SentryTest extends TestCase
         $this->assertEquals(2048, mb_strlen($row['url']));
     }
 
+    // Reactive reputation sources
+
+    private function recordingSource(?Outcome $outcome, bool &$checked): ReputationSourceInterface
+    {
+
+        return new class ($outcome, $checked) implements ReputationSourceInterface {
+
+            public function __construct(private ?Outcome $outcome, private bool &$checked) {}
+
+            public function check(string $ip_normalized): Outcome|null
+            {
+                $this->checked = true;
+                return $this->outcome;
+            }
+
+            public function cleanupDB(): void {}
+
+            public function migrateDB(): void {}
+
+        };
+    }
+
+    private function freshSentry(): Sentry
+    {
+        $sentry = new Sentry($this->db);
+        $sentry->migrateDB();
+        return $sentry;
+    }
+
+    public function test_reactive_source_not_checked_when_no_signals(): void
+    {
+        $checked = false;
+        $sentry = $this->freshSentry();
+        $sentry->addReputationSource(
+            $this->recordingSource(Outcome::Ban, $checked),
+            reactive_window: 3600,
+        );
+        try {
+            $sentry->resolve('1.2.3.4'); // no signals -> gated -> no throw expected
+        }
+        catch (BannedException | ChallengedException) {
+        }
+        $this->assertFalse($checked);
+    }
+
+    public function test_reactive_source_not_checked_when_signal_outside_window(): void
+    {
+        $checked = false;
+        $sentry = $this->freshSentry();
+        $sentry->addReputationSource(
+            $this->recordingSource(Outcome::Ban, $checked),
+            reactive_window: 3600,
+        );
+        $this->db->insert('signals')->row([
+            'ip'        => '1.2.3.4',
+            'type'      => 'test',
+            'malicious' => 0,
+            'time'      => time() - 7200,
+        ])->execute();
+        try {
+            $sentry->resolve('1.2.3.4');
+        }
+        catch (BannedException | ChallengedException) {
+        }
+        $this->assertFalse($checked);
+    }
+
+    public function test_reactive_source_checked_when_signal_inside_window(): void
+    {
+        $checked = false;
+        $sentry = $this->freshSentry();
+        $sentry->addReputationSource(
+            $this->recordingSource(Outcome::Ban, $checked),
+            reactive_window: 3600,
+        );
+        $this->db->insert('signals')->row([
+            'ip'        => '1.2.3.4',
+            'type'      => 'test',
+            'malicious' => 0,
+            'time'      => time() - 60,
+        ])->execute();
+        try {
+            $sentry->resolve('1.2.3.4');
+        }
+        catch (BannedException | ChallengedException) {
+        }
+        $this->assertTrue($checked);
+    }
+
+    public function test_reactive_source_gated_out_allows_ip(): void
+    {
+        $checked = false;
+        $sentry = $this->freshSentry();
+        $sentry->addReputationSource(
+            $this->recordingSource(Outcome::Ban, $checked),
+            reactive_window: 3600,
+        );
+        // no signals -> gated out -> must not throw
+        $this->expectNotToPerformAssertions();
+        $sentry->resolve('1.2.3.4');
+    }
+
+    public function test_reactive_source_writes_verdict_when_triggered(): void
+    {
+        $checked = false;
+        $sentry = $this->freshSentry();
+        $sentry->addReputationSource(
+            $this->recordingSource(Outcome::Ban, $checked),
+            reactive_window: 3600,
+        );
+        $this->db->insert('signals')->row([
+            'ip'        => '1.2.3.4',
+            'type'      => 'test',
+            'malicious' => 0,
+            'time'      => time(),
+        ])->execute();
+        try {
+            $sentry->resolve('1.2.3.4');
+        }
+        catch (BannedException | ChallengedException) {
+        }
+        $this->assertEquals(
+            1,
+            $this->db->select('verdicts')->where('ip', '1.2.3.4')->where('ban', 1)->count(),
+        );
+    }
+
+    public function test_non_reactive_source_checked_without_signals(): void
+    {
+        $checked = false;
+        $sentry = $this->freshSentry();
+        $sentry->addReputationSource(
+            $this->recordingSource(Outcome::Ban, $checked),
+            reactive_window: false,
+        );
+        try {
+            $sentry->resolve('1.2.3.4');
+        }
+        catch (BannedException | ChallengedException) {
+        }
+        $this->assertTrue($checked);
+    }
+
+    public function test_reactive_window_true_uses_default_window(): void
+    {
+        // NOTE: assumes default reactive window is 48h per the docblock.
+        $checked = false;
+        $sentry = $this->freshSentry();
+        $sentry->addReputationSource(
+            $this->recordingSource(Outcome::Ban, $checked),
+            reactive_window: true,
+        );
+        $this->db->insert('signals')->row([
+            'ip'        => '1.2.3.4',
+            'type'      => 'test',
+            'malicious' => 0,
+            'time'      => time() - (3600 * 24),
+        ])->execute();
+        try {
+            $sentry->resolve('1.2.3.4');
+        }
+        catch (BannedException | ChallengedException) {
+        }
+        $this->assertTrue($checked);
+    }
+
+    public function test_reactive_window_true_gates_out_signal_older_than_default(): void
+    {
+        // NOTE: assumes default reactive window is 48h per the docblock.
+        $checked = false;
+        $sentry = $this->freshSentry();
+        $sentry->addReputationSource(
+            $this->recordingSource(Outcome::Ban, $checked),
+            reactive_window: true,
+        );
+        $this->db->insert('signals')->row([
+            'ip'        => '1.2.3.4',
+            'type'      => 'test',
+            'malicious' => 0,
+            'time'      => time() - (3600 * 49),
+        ])->execute();
+        try {
+            $sentry->resolve('1.2.3.4');
+        }
+        catch (BannedException | ChallengedException) {
+        }
+        $this->assertFalse($checked);
+    }
+
+    public function test_reactive_gate_is_per_source(): void
+    {
+        $reactive_checked = false;
+        $always_checked = false;
+        $sentry = $this->freshSentry();
+        $sentry
+            ->addReputationSource(
+                $this->recordingSource(null, $reactive_checked),
+                reactive_window: 3600,
+            )
+            ->addReputationSource(
+                $this->recordingSource(null, $always_checked),
+                reactive_window: false,
+            );
+        try {
+            $sentry->resolve('1.2.3.4');
+        }
+        catch (BannedException | ChallengedException) {
+        }
+        $this->assertFalse($reactive_checked);
+        $this->assertTrue($always_checked);
+    }
+
+    public function test_reputation_verdict_uses_reputation_outcome_duration(): void
+    {
+        $checked = false;
+        $sentry = new Sentry($this->db); // reputation_outcome_duration: 86400
+        $sentry->migrateDB();
+        $sentry->addReputationSource($this->recordingSource(Outcome::Ban, $checked));
+        try {
+            $sentry->resolve('1.2.3.4');
+        }
+        catch (BannedException) {
+        }
+        $verdict = $this->db->select('verdicts')->where('ip', '1.2.3.4')->fetch();
+        $this->assertEqualsWithDelta(86400, $verdict['expires'] - $verdict['time'], 2);
+    }
+
+    // cleanupDB()
+
+    private function cleanupSentry(int $retention_days): Sentry
+    {
+        // NOTE: assumes constructor param is named `record_retention_days`.
+        $sentry = new Sentry($this->db, record_retention_days: $retention_days);
+        $sentry->migrateDB();
+        return $sentry;
+    }
+
+    public function test_cleanup_deletes_signals_older_than_retention(): void
+    {
+        $sentry = $this->cleanupSentry(30);
+        $this->db->insert('signals')->row([
+            'ip'        => '1.2.3.4',
+            'type'      => 'test',
+            'malicious' => 0,
+            'time'      => time() - (86400 * 31),
+        ])->execute();
+        $sentry->cleanupDB();
+        $this->assertEquals(0, $this->db->select('signals')->count());
+    }
+
+    public function test_cleanup_keeps_signals_within_retention(): void
+    {
+        $sentry = $this->cleanupSentry(30);
+        $this->db->insert('signals')->row([
+            'ip'        => '1.2.3.4',
+            'type'      => 'test',
+            'malicious' => 0,
+            'time'      => time() - (86400 * 29),
+        ])->execute();
+        $sentry->cleanupDB();
+        $this->assertEquals(1, $this->db->select('signals')->count());
+    }
+
+    public function test_cleanup_deletes_verdicts_expired_before_retention(): void
+    {
+        $sentry = $this->cleanupSentry(30);
+        $this->db->insert('verdicts')->row([
+            'ip'      => '1.2.3.4',
+            'ban'     => 1,
+            'reason'  => 'test',
+            'time'    => time() - (86400 * 60),
+            'expires' => time() - (86400 * 31),
+        ])->execute();
+        $sentry->cleanupDB();
+        $this->assertEquals(0, $this->db->select('verdicts')->count());
+    }
+
+    public function test_cleanup_keeps_verdicts_expired_within_retention(): void
+    {
+        $sentry = $this->cleanupSentry(30);
+        $this->db->insert('verdicts')->row([
+            'ip'      => '1.2.3.4',
+            'ban'     => 1,
+            'reason'  => 'test',
+            'time'    => time() - (86400 * 40),
+            'expires' => time() - (86400 * 29), // expired, but recently
+        ])->execute();
+        $sentry->cleanupDB();
+        $this->assertEquals(1, $this->db->select('verdicts')->count());
+    }
+
+    public function test_cleanup_keeps_active_unexpired_verdict(): void
+    {
+        $sentry = $this->cleanupSentry(30);
+        $this->db->insert('verdicts')->row([
+            'ip'      => '1.2.3.4',
+            'ban'     => 1,
+            'reason'  => 'test',
+            'time'    => time(),
+            'expires' => time() + 3600,
+        ])->execute();
+        $sentry->cleanupDB();
+        $this->assertEquals(1, $this->db->select('verdicts')->count());
+    }
+
+    public function test_cleanup_deletes_long_released_verdict_still_unexpired(): void
+    {
+        // exercises the third delete specifically: released long ago,
+        // but expires is still in the future so the second delete misses it
+        $sentry = $this->cleanupSentry(30);
+        $this->db->insert('verdicts')->row([
+            'ip'       => '1.2.3.4',
+            'ban'      => 1,
+            'reason'   => 'test',
+            'time'     => time() - (86400 * 60),
+            'expires'  => time() + (86400 * 30), // far future — survives delete #2
+            'released' => time() - (86400 * 31), // released past retention
+        ])->execute();
+        $sentry->cleanupDB();
+        $this->assertEquals(0, $this->db->select('verdicts')->count());
+    }
+
+    public function test_cleanup_keeps_recently_released_unexpired_verdict(): void
+    {
+        $sentry = $this->cleanupSentry(30);
+        $this->db->insert('verdicts')->row([
+            'ip'       => '1.2.3.4',
+            'ban'      => 1,
+            'reason'   => 'test',
+            'time'     => time() - (86400 * 5),
+            'expires'  => time() + (86400 * 30),
+            'released' => time() - (86400 * 1), // released yesterday
+        ])->execute();
+        $sentry->cleanupDB();
+        $this->assertEquals(1, $this->db->select('verdicts')->count());
+    }
+
+    public function test_cleanup_does_not_delete_verdict_with_null_released(): void
+    {
+        // guards the third delete's `released is not null` clause —
+        // a never-released, unexpired verdict must survive
+        $sentry = $this->cleanupSentry(30);
+        $this->db->insert('verdicts')->row([
+            'ip'       => '1.2.3.4',
+            'ban'      => 1,
+            'reason'   => 'test',
+            'time'     => time() - (86400 * 60),
+            'expires'  => time() + (86400 * 30),
+            'released' => null,
+        ])->execute();
+        $sentry->cleanupDB();
+        $this->assertEquals(1, $this->db->select('verdicts')->count());
+    }
+
+    public function test_cleanup_calls_reputation_source_cleanup(): void
+    {
+        $cleaned = false;
+        $sentry = $this->cleanupSentry(30);
+        $sentry->addReputationSource(
+
+            new class ($cleaned) implements ReputationSourceInterface {
+
+            public function __construct(private bool &$cleaned) {}
+
+            public function check(string $ip_normalized): Outcome|null
+            {
+                return null;
+            }
+
+            public function cleanupDB(): void
+            {
+                $this->cleaned = true;
+            }
+
+            public function migrateDB(): void {}
+
+            },
+        );
+        $sentry->cleanupDB();
+        $this->assertTrue($cleaned);
+    }
+
+    public function test_cleanup_uses_default_90_day_retention(): void
+    {
+        $sentry = new Sentry($this->db); // default record_retention_days: 90
+        $sentry->migrateDB();
+        $this->db->insert('signals')
+            ->row(['ip' => '1.2.3.4', 'type' => 'test', 'malicious' => 0, 'time' => time() - (86400 * 91)])
+            ->row(['ip' => '5.6.7.8', 'type' => 'test', 'malicious' => 0, 'time' => time() - (86400 * 89)])
+            ->execute();
+        $sentry->cleanupDB();
+        $this->assertEquals(1, $this->db->select('signals')->count());
+        $remaining = $this->db->select('signals')->fetch();
+        $this->assertEquals('5.6.7.8', $remaining['ip']);
+    }
+
 }

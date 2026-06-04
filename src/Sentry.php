@@ -39,6 +39,12 @@ class Sentry
     protected array $reputation_sources = [];
 
     /**
+     * List of which reputation sources should be considered "reactive" and only be checked if the given IP already has signals in the given TTL. Zero indicates that a reputation source should be used early for all requests.
+     * @var array<int,int>
+     */
+    protected array $reputation_source_reactivity = [];
+
+    /**
      * Lazy-instantiated Reports object for quering the database for signals, verdicts, and other data.
      * @var Reports|null
      */
@@ -56,6 +62,7 @@ class Sentry
      * @param string|null $abuseipdb_key your AbuseIPDB API Key
      * @param int $abuseipdb_daily_ip_refreshes the number of refreshes of stale IPs to do per day -- generally best set to about 1/3 to 2/3 your API limit
      * @param int $abuseipdb_daily_range_refreshes the number of refreshes of stale IP ranges to do per day -- generally best set to about 1/2 to 3/4 your API limit
+     * @param bool|int $abuseipdb_reactive_window Optionally set a "reactive window" time in seconds to indicate that this AbuseIPDB should only be queried for IPs that have already triggered at least one signal within that window. Set reactive window to true to use the default reactivity window of 48 hours or false to disable it.
      * @codeCoverageIgnore
      */
     public static function default(
@@ -64,6 +71,7 @@ class Sentry
         string|null $abuseipdb_key = null,
         int $abuseipdb_daily_ip_refreshes = 1000,
         int $abuseipdb_daily_range_refreshes = 500,
+        bool|int $abuseipdb_reactive_window = false,
     ): static
     {
         $instance = (new static($db))
@@ -102,7 +110,7 @@ class Sentry
                 ip_daily_refreshes: $abuseipdb_daily_ip_refreshes,
                 range_daily_refreshes: $abuseipdb_daily_range_refreshes,
             );
-            $instance->addReputationSource($abuseipdb);
+            $instance->addReputationSource($abuseipdb, $abuseipdb_reactive_window);
         }
         // return built instance
         return $instance;
@@ -316,7 +324,18 @@ class Sentry
     {
         // loop through all reputation sources
         $first_challenge_source = null;
-        foreach ($this->reputation_sources as $source) {
+        foreach ($this->reputation_sources as $i => $source) {
+            // check if this source is marked reactive, and check existing signals if so, continue if nothing found
+            $reactivity = $this->reputation_source_reactivity[$i];
+            if ($reactivity > 0) {
+                $count = $this->db->select('signals')
+                    ->where('ip', $ip_normalized)
+                    ->where('`time` >= ?', time() - $reactivity)
+                    ->count();
+                if ($count === 0)
+                    continue;
+            }
+            // actually check source
             $result = $source->check($ip_normalized);
             if ($result === Outcome::Ban) {
                 // ban on first result matching this source
@@ -370,11 +389,16 @@ class Sentry
     }
 
     /**
-     * Add an external reputation source for automatically banning/challenging IPs based on external data such as AbuseIPDB
+     * Add an external reputation source for automatically banning/challenging IPs based on external data such as AbuseIPDB. Optionally set a "reactive window" time in seconds to indicate that this source should only be queried for IPs that have already triggered at least one signal within that window. Set reactive window to true to use the default reactivity window of 48 hours or false to disable it.
      */
-    public function addReputationSource(ReputationSourceInterface $source): static
+    public function addReputationSource(ReputationSourceInterface $source, bool|int $reactive_window = false): static
     {
+        if ($reactive_window === false)
+            $reactive_window = 0;
+        if ($reactive_window === true)
+            $reactive_window = 86400 * 2;
         $this->reputation_sources[] = $source;
+        $this->reputation_source_reactivity[] = $reactive_window;
         return $this;
     }
 

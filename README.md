@@ -179,29 +179,20 @@ $abuseipdb->migrateDB();
 $sentry->addReputationSource($abuseipdb);
 ```
 
+External reputation data may also be used "reactively" if you want to, for example, conserve your AbuseIPDB API calls. In this mode a window in seconds can be specified as the second argument to `addReputationSource()` to only run that reputation source against IPs that have triggered some signal in that time window.
+
 ### AbuseIPDB
 
-The bundled `AbuseIpDb` source checks individual IPs and their /24 (IPv4) or /48 (IPv6) blocks. Results are cached locally to preserve API quota. Default value of 500 in daily_refreshes is designed to be appropriate for use with a free AbuseIPDB account.
+The bundled `AbuseIpDb` source checks individual IPs and their /24 (IPv4) or /48 (IPv6) blocks. Results are cached locally to preserve API quota. Default values for optional parameters are designed to be appropriate for low-to-moderate traffic sites on free webmaster accounts.
+
 ```php
 $abuseipdb = new AbuseIpDb(
     db: $db,
-    api_key: 'your-api-key',
-    challenge_threshold: 70, // score >= this -> challenge
-    ban_threshold: 90,       // score >= this -> ban
-                             // score < challenge_threshold -> release existing verdict
-    ttl: 86400,              // refresh cached scores after this many seconds
-    max_stale: 86400 * 14,   // use stale data for up to this long if quota is exhausted
-    daily_refreshes: 500,    // max refreshes of known IPs per day (reserve quota for new IPs)
-    report_days: 30,         // days of reports to consider in API requests
+    api_key: 'your-api-key'
 );
 ```
 
-Custom reputation sources can be added by implementing `ReputationSourceInterface`:
-```php
-interface ReputationSourceInterface {
-    public function check(string $ip_normalized): Outcome|null;
-}
-```
+Custom reputation sources can be added by implementing `ReputationSourceInterface`.
 
 Return `Outcome::Ban`, `Outcome::Challenge`, or `null` to pass. The source's class name is used as the verdict reason, which allows verdicts to be automatically released when a re-check returns a clean score.
 
@@ -214,13 +205,21 @@ All IP addresses are normalized before storage:
 
 ## Database Setup
 
-smolSentry stores all state in SQLite. Call `migrateDB()` before first use:
+smolSentry stores all state in SQLite. Call `migrateDB()` before first use. This will also call migrations on any reputation sources that need it.
+
 ```php
-$sentry->migrateDB(); // sets up signals and verdicts tables
-$abuseipdb->migrateDB(); // sets up cache tables, if using AbuseIPDB
+$sentry->migrateDB();
 ```
 
 Because all state is in a single database file, multiple applications on the same server can share a smolSentry database — signals and verdicts from one site count toward thresholds on all others.
+
+## Database Maintenance
+
+Periodic database maintenance can be run by calling `cleanupDb()`. This will clear out old records and free up space for efficiency. This will also call maintenace calls on any reputation sources that need it. Ideally this should be called automatically in the background at least roughly once per day.
+
+```php
+$sentry->cleanupDb();
+```
 
 ## Exception Handling
 ```php
