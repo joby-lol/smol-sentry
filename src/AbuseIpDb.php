@@ -34,10 +34,10 @@ class AbuseIpDb implements ReputationSourceInterface
         protected readonly string $api_key,
         public readonly int $challenge_threshold = 70,
         public readonly int $ban_threshold = 90,
-        public readonly int $cache_ttl = 86400,
+        public readonly int $cache_ttl = 86400 * 2,
         public readonly int $max_stale_ttl = 86400 * 30,
-        public readonly int $ip_daily_refreshes = 1500,
-        public readonly int $range_daily_refreshes = 500,
+        public readonly int $ip_daily_refreshes = 1000,
+        public readonly int $range_daily_refreshes = 250,
         public readonly int $report_days = 30,
     ) {}
 
@@ -258,7 +258,7 @@ class AbuseIpDb implements ReputationSourceInterface
         $score = new Score(
             $range_normalized,
             true,
-            (int) ceil(count($data['reportedAddress']) / $data['numPossibleHosts']),
+            (int) ceil(100 * (count($data['reportedAddress']) / $data['numPossibleHosts'])),
             time(),
             $this->refreshAtTime(time()),
             $this->ignoreAtTime(time()),
