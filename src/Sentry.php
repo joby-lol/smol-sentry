@@ -12,11 +12,9 @@ namespace Joby\Smol\Sentry;
 use InvalidArgumentException;
 use Joby\Smol\Query\DB;
 use Joby\Smol\Query\Migrator;
-use Joby\Smol\Request\Request;
 use Joby\Smol\Sentry\Reporting\Reports;
 use RuntimeException;
 use SensitiveParameter;
-use Throwable;
 
 /**
  * Straightforward class for logging signals by IP address and determining whether a given IP should be banned or challenged. The basic interface beyond initial setup shouldn't require calling anything but resolve() to check for bans/challenges, and signal() to indicate that something suspicious/malicious has happened. Both public methods will throw exceptions indicating the level of action that is necessary, should it be determined at any time that the current client should be challenged or banned.
@@ -287,16 +285,11 @@ class Sentry
         if (empty($_SERVER['HTTP_HOST']) || empty($_SERVER['REQUEST_URI'])) {
             return null;
         }
-        try {
-            return (string) Request::current()->url;
-        }
-        catch (Throwable $e) {
-            $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
-                ? 'https'
-                : 'http';
-            // @phpstan-ignore-next-line these values are definitely at least stringish enough that we can trust it
-            return $scheme . '://' . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI'];
-        }
+        $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+            ? 'https'
+            : 'http';
+        // @phpstan-ignore-next-line these values are definitely at least stringish enough that we can trust it
+        return $scheme . '://' . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI'];
     }
 
     /**
