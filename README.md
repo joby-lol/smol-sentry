@@ -1,6 +1,6 @@
 # smolSentry
 
-A lightweight IP-based threat detection and mitigation library for PHP 8.1+.
+A lightweight IP-based threat detection and mitigation library for PHP 8.2+.
 
 ## Installation
 ```bash
