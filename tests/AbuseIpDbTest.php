@@ -333,6 +333,13 @@ class AbuseIpDbTest extends TestCase
         // should have gotten all this from a single range api request
         $this->assertEquals(1, $this->source->range_api_call_count);
         $this->assertEquals(0, $this->source->ip_api_call_count);
+        // range score should be 2/100 because one of thee three reports had zero score
+        $this->assertEquals(
+            '2',
+            $this->source->db->select('abuseipdb_blocks')
+                ->where('ip', '10.0.0.0/24')
+                ->fetch()['score'],
+        );
     }
 
     // Helpers

@@ -251,14 +251,17 @@ class AbuseIpDb implements ReputationSourceInterface
         if ($data === null)
             return null;
         // write all individual IP scores to database
+        $flagged = 0;
         foreach ($data['reportedAddress'] as $reported) {
+            if ($reported['abuseConfidenceScore'])
+                $flagged++;
             $this->setIpScore($reported['ipAddress'], $reported['abuseConfidenceScore']);
         }
         // compute a score and write to database
         $score = new Score(
             $range_normalized,
             true,
-            (int) ceil(100 * (count($data['reportedAddress']) / $data['numPossibleHosts'])),
+            (int) ceil(100 * ($flagged / $data['numPossibleHosts'])),
             time(),
             $this->refreshAtTime(time()),
             $this->ignoreAtTime(time()),
