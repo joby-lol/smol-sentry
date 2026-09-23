@@ -26,7 +26,7 @@
   },
   "require": {
     "php": ">=8.2",
-    "joby/smol-query": "^1.2"
+    "joby/smol-query": "^1.2|^2"
   },
   "scripts": {
     "update-crs": "Joby\\Smol\\Sentry\\InspectionRules\\OwaspCrsUpdater::update"
