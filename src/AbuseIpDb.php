@@ -288,6 +288,7 @@ class AbuseIpDb implements ReputationSourceInterface
         $context = stream_context_create([
             'http' => [
                 'method'        => 'GET',
+                'timeout'       => 2,
                 'header'        => implode("\r\n", [
                     'Key: ' . $this->api_key,
                     'Accept: application/json',
@@ -298,7 +299,11 @@ class AbuseIpDb implements ReputationSourceInterface
         // fetch response
         $response = @file_get_contents($url, false, $context);
         // check for rate limit
-        foreach ($http_response_header as $header) {
+        /** @var array<string> $headers */
+        $headers = function_exists('http_get_last_response_headers')
+            ? (http_get_last_response_headers() ?? [])
+            : ($http_response_header ?? []);//@phpstan-ignore-line it might be null, actually
+        foreach ($headers as $header) {
             // if response was 429, then rate limit
             if (str_starts_with($header, 'HTTP/') && str_contains($header, '429')) {
                 $this->setRangeRateLimited();
@@ -351,6 +356,7 @@ class AbuseIpDb implements ReputationSourceInterface
         $context = stream_context_create([
             'http' => [
                 'method'        => 'GET',
+                'timeout'       => 2,
                 'header'        => implode("\r\n", [
                     'Key: ' . $this->api_key,
                     'Accept: application/json',
@@ -361,7 +367,11 @@ class AbuseIpDb implements ReputationSourceInterface
         // fetch response
         $response = @file_get_contents($url, false, $context);
         // check for rate limit
-        foreach ($http_response_header as $header) {
+        /** @var array<string> $headers */
+        $headers = function_exists('http_get_last_response_headers')
+            ? (http_get_last_response_headers() ?? [])
+            : ($http_response_header ?? []);//@phpstan-ignore-line it might be null, actually
+        foreach ($headers as $header) {
             // if response was 429, then rate limit
             if (str_starts_with($header, 'HTTP/') && str_contains($header, '429')) {
                 $this->setIpRateLimited();
