@@ -103,8 +103,8 @@ $inspector->inspect(
 `Sentry::default()` configures a reasonable starting point:
 
 - One malicious signal: immediate ban (5 minutes base, ramps up exponentially for repeat offenders)
-- 5 suspicious signals in 10 minutes: challenge
-- 20 suspicious signals in an hour: ban
+- 10 suspicious signals in 10 minutes: challenge
+- 30 suspicious signals in an hour: ban
 
 Optionally also configured with AbuseIPDB lookups:
 ```php
